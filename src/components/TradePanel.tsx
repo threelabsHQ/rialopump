@@ -1,0 +1,232 @@
+import { useState, useEffect, useCallback } from "react";
+import { GlassCard, InnerField } from "./ui/GlassCard";
+import { api } from "../api";
+import type { Token, WalletState, QuoteResult } from "../types";
+import { formatRlo } from "../utils/crypto";
+import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { toast } from "sonner";
+import { clsx } from "clsx";
+
+interface TradePanelProps {
+  token: Token;
+  wallet: WalletState | null;
+  onTrade: () => void;
+}
+
+type TxState = "idle" | "quoting" | "confirming" | "success" | "error";
+
+export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
+  const [tab, setTab] = useState<"buy" | "sell">("buy");
+  const [amount, setAmount] = useState("");
+  const [quote, setQuote] = useState<QuoteResult | null>(null);
+  const [txState, setTxState] = useState<TxState>("idle");
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [debounceTimer, setDebounceTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+
+  const KELVIN = 1_000_000_000;
+  const quickAmounts = tab === "buy"
+    ? [0.1, 0.5, 1, 5]
+    : [1_000, 10_000, 100_000, 500_000];
+
+  const fetchQuote = useCallback(async (val: string) => {
+    if (!val || parseFloat(val) <= 0) { setQuote(null); return; }
+    setTxState("quoting");
+    try {
+      if (tab === "buy") {
+        const kelvin = Math.round(parseFloat(val) * KELVIN);
+        const q = await api.quoteBuy(token.id, kelvin);
+        setQuote(q);
+      } else {
+        const tokenAmt = parseFloat(val);
+        const q = await api.quoteSell(token.id, tokenAmt);
+        setQuote(q);
+      }
+    } catch {}
+    setTxState("idle");
+  }, [tab, token.id]);
+
+  useEffect(() => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    const t = setTimeout(() => fetchQuote(amount), 400);
+    setDebounceTimer(t);
+    return () => clearTimeout(t);
+  }, [amount, tab]);
+
+  const handleTrade = async () => {
+    if (!wallet) { toast.error("Connect wallet first"); return; }
+    if (!amount || parseFloat(amount) <= 0) { toast.error("Enter an amount"); return; }
+
+    setTxState("confirming");
+    setErrorMsg(null);
+    try {
+      let result: any;
+      if (tab === "buy") {
+        const kelvin = Math.round(parseFloat(amount) * KELVIN);
+        result = await api.buy(token.id, wallet.pubkey, kelvin);
+        toast.success(`Bought ${result.trade.tokenAmount.toLocaleString()} $${token.symbol}`);
+      } else {
+        const tokenAmt = parseFloat(amount);
+        result = await api.sell(token.id, wallet.pubkey, tokenAmt);
+        toast.success(`Sold ${tokenAmt.toLocaleString()} $${token.symbol}`);
+      }
+      setTxHash(result.trade.txHash);
+      setTxState("success");
+      setAmount("");
+      setQuote(null);
+      onTrade();
+    } catch (e: any) {
+      setErrorMsg(e.message);
+      setTxState("error");
+    }
+  };
+
+  const isBusy = txState === "quoting" || txState === "confirming";
+
+  return (
+    <GlassCard className="p-4 space-y-4">
+      {/* Tab row */}
+      <div className="flex rounded-xl p-1" style={{ background: "rgba(18,45,69,0.06)" }}>
+        <button
+          onClick={() => { setTab("buy"); setAmount(""); setQuote(null); setTxState("idle"); }}
+          className={clsx(
+            "flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2",
+            tab === "buy" && "shadow-sm"
+          )}
+          style={tab === "buy"
+            ? { background: "var(--surface-strong)", color: "var(--success)" }
+            : { color: "var(--muted)" }}
+        >
+          <TrendingUp size={14} /> Buy
+        </button>
+        <button
+          onClick={() => { setTab("sell"); setAmount(""); setQuote(null); setTxState("idle"); }}
+          className={clsx(
+            "flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2",
+            tab === "sell" && "shadow-sm"
+          )}
+          style={tab === "sell"
+            ? { background: "var(--surface-strong)", color: "var(--danger)" }
+            : { color: "var(--muted)" }}
+        >
+          <TrendingDown size={14} /> Sell
+        </button>
+      </div>
+
+      {/* Quick amounts */}
+      <div className="flex gap-2 flex-wrap">
+        {quickAmounts.map((q) => (
+          <button
+            key={q}
+            onClick={() => setAmount(q.toString())}
+            className="px-3 py-1 rounded-lg text-xs font-semibold transition-all active:scale-95"
+            style={{
+              background: "rgba(255,255,255,0.58)",
+              backdropFilter: "blur(12px)",
+              border: "1px solid rgba(255,255,255,0.66)",
+              color: "var(--ink-2)",
+            }}
+          >
+            {tab === "buy" ? `${q} RLO` : `${q >= 1000 ? (q / 1000).toFixed(0) + "K" : q}`}
+          </button>
+        ))}
+      </div>
+
+      {/* Amount input */}
+      <InnerField className="flex items-center gap-2 px-4 py-3">
+        <input
+          type="number"
+          placeholder={tab === "buy" ? "RLO amount" : "Token amount"}
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          className="flex-1 bg-transparent outline-none text-lg font-bold tabular-nums"
+          style={{ color: "var(--ink)" }}
+          min="0"
+          step={tab === "buy" ? "0.01" : "1"}
+        />
+        <span className="text-sm font-semibold" style={{ color: "var(--muted)" }}>
+          {tab === "buy" ? "RLO" : `$${token.symbol}`}
+        </span>
+      </InnerField>
+
+      {/* Quote preview */}
+      {quote && (
+        <div
+          className="rounded-xl p-3 space-y-1.5"
+          style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}
+        >
+          <div className="flex justify-between text-xs">
+            <span style={{ color: "var(--muted)" }}>
+              {tab === "buy" ? "Tokens received" : "RLO received"}
+            </span>
+            <span className="font-semibold tabular-nums" style={{ color: "var(--ink)" }}>
+              {tab === "buy"
+                ? `~${(quote.tokensOut || 0).toLocaleString()} $${token.symbol}`
+                : `~${formatRlo(quote.rloOut || 0)} RLO`}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span style={{ color: "var(--muted)" }}>Platform fee (1%)</span>
+            <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>
+              {formatRlo(quote.fee)} RLO
+            </span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span style={{ color: "var(--muted)" }}>Price per token</span>
+            <span className="font-medium tabular-nums" style={{ color: "var(--ink)" }}>
+              {formatRlo(quote.price * 1_000_000_000, 8)} RLO
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Success / Error state */}
+      {txState === "success" && txHash && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "rgba(26,128,71,0.08)" }}>
+          <CheckCircle2 size={16} style={{ color: "var(--success)" }} />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold" style={{ color: "var(--success)" }}>Trade confirmed</p>
+            <p className="text-xs mono truncate" style={{ color: "var(--muted)" }}>{txHash}</p>
+          </div>
+        </div>
+      )}
+      {txState === "error" && errorMsg && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-xl" style={{ background: "rgba(186,43,76,0.08)" }}>
+          <AlertCircle size={16} className="mt-0.5 shrink-0" style={{ color: "var(--danger)" }} />
+          <p className="text-xs" style={{ color: "var(--danger)" }}>{errorMsg}</p>
+        </div>
+      )}
+
+      {/* CTA */}
+      <button
+        onClick={handleTrade}
+        disabled={isBusy || !amount || parseFloat(amount) <= 0 || txState === "success"}
+        className={clsx(
+          "w-full py-3.5 rounded-xl text-sm font-bold transition-all active:scale-[0.98] flex items-center justify-center gap-2",
+          (isBusy || !amount) && "opacity-50 cursor-not-allowed"
+        )}
+        style={{
+          background: txState === "success"
+            ? "var(--success)"
+            : tab === "buy" ? "rgba(26,128,71,0.85)" : "rgba(186,43,76,0.85)",
+          color: "white",
+        }}
+      >
+        {txState === "confirming" && <Loader2 size={16} className="animate-spin" />}
+        {txState === "confirming"
+          ? "Confirming…"
+          : txState === "success"
+          ? "Trade complete"
+          : tab === "buy"
+          ? `Buy $${token.symbol}`
+          : `Sell $${token.symbol}`}
+      </button>
+
+      {!wallet && (
+        <p className="text-center text-xs" style={{ color: "var(--muted)" }}>
+          Connect a wallet to trade
+        </p>
+      )}
+    </GlassCard>
+  );
+}
