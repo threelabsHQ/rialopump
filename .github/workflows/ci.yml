@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. TypeScript: lint + typecheck ─────────────────────────────────────────
+  ts-check:
+    name: TypeScript lint & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+  # ── 2. Solidity: build + test (Foundry) ─────────────────────────────────────
+  forge-check:
+    name: Forge build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install Forge dependencies (lib/)
+        run: forge install
+        # forge install reads lib/ from .gitmodules; no-op when lib/ is empty
+
+      - name: Build contracts
+        run: forge build --sizes
+
+      - name: Run Forge tests
+        run: forge test -vv
+        env:
+          # Provide a dummy RPC so foundry.toml env-var interpolation doesn't fail
+          RIALO_DEVNET_RPC: https://devnet.rialo.io:4101
