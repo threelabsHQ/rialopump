@@ -23,6 +23,8 @@ jobs:
     name: Build PolkaVM + Deploy to Rialo Devnet
     runs-on: ubuntu-latest
     environment: devnet
+    permissions:
+      contents: write  # needed to commit updated AGENTS.md back to the repo
 
     steps:
       - uses: actions/checkout@v4
