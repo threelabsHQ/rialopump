@@ -1,6 +1,19 @@
-# CI/CD Setup Guide
+# CI/CD Setup Guide — hugefun on Rialo Devnet
 
-Three GitHub Actions workflows ship with this repository.
+hugefun uses **Rialo**, a custom blockchain (by Subzero Labs) whose programs are
+compiled as **Solana-compatible eBPF shared libraries** (`.so`) and deployed with
+the Rialo CDK's `ProgramDeployment`. This is **not EVM** — there are no Solidity
+contracts, no Foundry, no `forge` commands.
+
+---
+
+## Program architecture
+
+| File | Purpose |
+|---|---|
+| `program/Cargo.toml` | Rust crate definition — compiles to eBPF `.so` |
+| `program/src/lib.rs` | On-chain bonding-curve program (CreateToken / Buy / Sell) |
+| `scripts/deploy-program.ts` | TypeScript deploy script using `@rialo/ts-cdk ProgramDeployment` |
 
 ---
 
@@ -8,90 +21,83 @@ Three GitHub Actions workflows ship with this repository.
 
 | File | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | Every push / PR | Lint, typecheck, `forge build`, `forge test` |
-| `deploy-contracts.yml` | Push to `main` (contracts changed) or manual | Deploys `DeployLaunchpad.s.sol` to Rialo devnet; updates `AGENTS.md` |
-| `deploy-app.yml` | Push to `main` (non-contract changes) or manual | Builds Vite frontend; deploy stubs for Fly.io / Railway / Render |
+| `ci.yml` | Every push / PR | TS lint + typecheck; `cargo check`; `cargo test`; `cargo build-sbf` |
+| `deploy-contracts.yml` | Push to `main` (program changed) or manual | Builds `.so`, runs tests, deploys to Rialo devnet via `ProgramDeployment`, updates `AGENTS.md` |
+| `deploy-app.yml` | Push to `main` (non-program changes) or manual | Vite build; deploy stubs for Fly.io / Railway / Render |
 
 ---
 
 ## Required GitHub Secrets
 
-Go to **Settings → Secrets and variables → Actions** in your GitHub repo and add:
+**Settings → Secrets and variables → Actions:**
 
-| Secret name | Description | Where to get it |
+| Secret | Description | How to get it |
 |---|---|---|
-| `DEPLOYER_PRIVATE_KEY` | Hex private key (no `0x` prefix) of the deployer wallet on Rialo devnet | Generate a new keypair — see below |
+| `DEPLOYER_SECRET_HEX` | 64-char hex Ed25519 private key for the deployer wallet | Generate via `/wallet/generate` endpoint or any Ed25519 keygen |
+| `PROGRAM_KEYPAIR_HEX` | 64-char hex Ed25519 key that becomes the stable program ID | **Generated on first deploy** — the deploy script prints it; save it immediately |
 
 ## GitHub Variables (non-secret)
 
-| Variable name | Default | Description |
+| Variable | Default | Description |
 |---|---|---|
-| `RIALO_DEVNET_RPC` | `https://devnet.rialo.io:4101` | Rialo devnet JSON-RPC URL. Set this variable if the URL changes. |
-| `VITE_API_BASE_URL` | _(empty)_ | Optional: base URL the frontend uses to reach the backend API when deployed |
+| `RIALO_DEVNET_RPC` | `https://devnet.rialo.io:4101` | Rialo devnet JSON-RPC URL |
 
 ---
 
-## Generating a Deployer Wallet
-
-The deployer needs a Rialo devnet keypair. You can generate one using the server's `/wallet/generate` endpoint:
+## Building locally
 
 ```bash
-curl -X POST http://localhost:3001/wallet/generate
-# returns { secretHex: "...", note: "..." }
+# Install Rust + Solana CLI (provides cargo-build-sbf)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+
+# Build the eBPF binary
+cd program
+cargo build-sbf --manifest-path Cargo.toml
+# Output: program/target/deploy/hugefun_program.so
+
+# Run native unit tests
+cargo test
 ```
 
-The `secretHex` value is 64 hex characters — paste it as `DEPLOYER_PRIVATE_KEY`.
+---
 
-Then fund it on devnet:
+## Deploying locally
 
 ```bash
-PUBKEY=$(curl -s http://localhost:3001/deployer | jq -r .pubkey)
+# Set env vars
+export DEPLOYER_SECRET_HEX=<your 64-char hex key>
+export PROGRAM_KEYPAIR_HEX=<your 64-char hex program keypair>  # omit on first deploy
+export RIALO_DEVNET_RPC=https://devnet.rialo.io:4101
+
+bun run scripts/deploy-program.ts
+```
+
+On **first deploy**, omit `PROGRAM_KEYPAIR_HEX` — the script generates a fresh one and
+prints it. Save that value as `PROGRAM_KEYPAIR_HEX` for all future upgrades, otherwise
+a new program ID is created each time.
+
+---
+
+## Generating a deployer wallet
+
+```bash
+# Via the hugefun API server (must be running)
+curl -X POST http://localhost:3001/wallet/generate
+# Returns: { secretHex: "...", note: "..." }
+
+# Fund it on devnet
 curl -X POST http://localhost:3001/airdrop \
   -H "Content-Type: application/json" \
-  -d "{\"pubkey\": \"$PUBKEY\", \"amount\": 10}"
+  -d '{"pubkey": "<your pubkey>", "amount": 100}'
 ```
 
-Or set `RIALO_DEPLOYER_SECRET_HEX` in your server's `.env` and call `/airdrop` from the UI.
-
 ---
 
-## Contract Deploy Flow
-
-1. Push to `main` with any change under `contracts/`, `foundry.toml`, or `remappings.txt`.
-2. The `deploy-contracts` workflow runs `forge test` first — it aborts if tests fail.
-3. `DeployLaunchpad.s.sol` is broadcast via `forge script --broadcast`.
-4. The `Create2Factory` address is extracted from stdout (`FACTORY=0x...`).
-5. `AGENTS.md` is updated with the new address and auto-committed (`[skip ci]`).
-
-To add more contracts, open `contracts/script/DeployLaunchpad.s.sol` and fill in `_deployLaunchpadContracts()`.
-
-### Manual / dry-run
-
-From the **Actions** tab → **Deploy Contracts** → **Run workflow**:
-
-- `dry_run: true` — simulates without broadcasting
-- `reuse_factory: 0x...` — reuses an existing `Create2Factory` (avoids a new deploy fee)
-
----
-
-## App Deploy Flow
-
-The `deploy-app.yml` workflow builds the Vite frontend to `dist/` and uploads it as a GitHub artifact. Uncomment the relevant `deploy-*` job block for your hosting provider:
-
-- **Fly.io**: add `FLY_API_TOKEN` secret; run `fly launch` once to create `fly.toml`
-- **Railway**: add `RAILWAY_TOKEN` secret
-- **Render**: add `RENDER_DEPLOY_HOOK_URL` secret (from Render dashboard → Deploy Hook)
-
-The server (`server/index.ts`) is a plain Express app — any Node/Bun-capable host works. The `package.json` `start` script (`bun run server/index.ts`) is used by Docker-based hosts.
-
----
-
-## Environment Variables for the Deployed Server
-
-Set these in your hosting provider's environment config:
+## Environment variables for the deployed server
 
 | Variable | Required | Description |
 |---|---|---|
 | `RIALO_DEVNET_RPC` | No | RPC URL (defaults to `https://devnet.rialo.io:4101`) |
-| `RIALO_DEPLOYER_SECRET_HEX` | No | Deployer keypair hex (enables real TX broadcast instead of simulation) |
+| `RIALO_DEPLOYER_SECRET_HEX` | No | Server deployer keypair (enables real TX broadcast) |
 | `PORT` | No | HTTP port (defaults to `3001`) |

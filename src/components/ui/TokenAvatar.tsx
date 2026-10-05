@@ -28,7 +28,7 @@ export function TokenAvatar({ imageUrl, symbol, size = 48, className }: TokenAva
         className={className}
         style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover" }}
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).style.display = "none";
+          (e.currentTarget).style.display = "none";
         }}
       />
     );

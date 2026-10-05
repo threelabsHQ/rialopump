@@ -3,7 +3,7 @@ import { ProgressBar } from "./ui/ProgressBar";
 import { TokenAvatar } from "./ui/TokenAvatar";
 import type { Token } from "../types";
 import { formatRlo, formatLargeNumber, timeAgo } from "../utils/crypto";
-import { TrendingUp, Users } from "lucide-react";
+
 
 interface TokenCardProps {
   token: Token;

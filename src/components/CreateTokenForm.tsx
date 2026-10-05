@@ -42,9 +42,10 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
       });
       toast.success(`${name} ($${symbol}) launched!`);
       onCreated(result.token.id);
-    } catch (e: any) {
-      setError(e.message);
-      toast.error(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -166,7 +167,7 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
         )}
 
         <button
-          onClick={handleCreate}
+          onClick={() => { void handleCreate(); }}
           disabled={!valid || loading || !wallet}
           className={clsx(
             "w-full py-3.5 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 active:scale-[0.98]",

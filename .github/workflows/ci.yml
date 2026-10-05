@@ -31,29 +31,79 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # ── 2. Solidity: build + test (Foundry) ─────────────────────────────────────
-  forge-check:
-    name: Forge build & test
+  # ── 2. Rialo program: cargo check + tests (host target, no rialo toolchain) ─
+  #    Catches type errors and logic bugs without needing the full Rialo toolchain.
+  program-check:
+    name: Rust program check & test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
         with:
-          submodules: recursive
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            program/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('program/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - name: cargo check (native)
+        working-directory: program
+        # Use no-entrypoint so the PolkaVM-only entrypoint macro doesn't trigger
+        run: cargo check --features no-entrypoint
+
+      - name: cargo test (native)
+        working-directory: program
+        run: cargo test --features no-entrypoint --lib
+
+  # ── 3. Rialo program: full PolkaVM build via cargo +rialo ────────────────────
+  #    Installs rialoman + the rialo Rust toolchain, then compiles to .polkavm.
+  program-build-polkavm:
+    name: Build PolkaVM binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rialoman
+        run: |
+          curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh | bash
+          echo "$HOME/.local/share/rialo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rialo stable release + Rust toolchain
+        run: |
+          rialoman install stable@latest
+          rialoman use stable@latest
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
         with:
-          version: stable
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            program/target
+          key: rialo-polkavm-${{ runner.os }}-${{ hashFiles('program/Cargo.lock') }}
+          restore-keys: rialo-polkavm-${{ runner.os }}-
 
-      - name: Install Forge dependencies (lib/)
-        run: forge install
-        # forge install reads lib/ from .gitmodules; no-op when lib/ is empty
+      - name: Build .polkavm binary
+        working-directory: program
+        run: cargo +rialo build --release
 
-      - name: Build contracts
-        run: forge build --sizes
+      - name: Verify .polkavm artifact exists
+        run: |
+          find program/target -name "*.polkavm" | tee /tmp/polkavm-artifacts.txt
+          if [ ! -s /tmp/polkavm-artifacts.txt ]; then
+            echo "ERROR: no .polkavm file found after build" && exit 1
+          fi
 
-      - name: Run Forge tests
-        run: forge test -vv
-        env:
-          # Provide a dummy RPC so foundry.toml env-var interpolation doesn't fail
-          RIALO_DEVNET_RPC: https://devnet.rialo.io:4101
+      - name: Upload .polkavm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hugefun-program-polkavm
+          path: program/target/**/*.polkavm
+          if-no-files-found: error
+          retention-days: 7

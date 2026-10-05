@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { createRialoClient, RIALO_DEVNET_CHAIN, Mnemonic, Keypair } from "@rialo/ts-cdk";
+import { createRialoClient, RIALO_DEVNET_CHAIN, Keypair } from "@rialo/ts-cdk";
 import type { RialoClient } from "@rialo/ts-cdk";
 import { randomBytes } from "crypto";
 import { v4 as uuidv4 } from "uuid";
@@ -164,8 +164,8 @@ app.get("/chain", async (_req, res) => {
       client.getEpochInfo(),
     ]);
     res.json({ blockHeight: height.toString(), epoch: epoch.epoch, slot: epoch.absoluteSlot.toString() });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -179,8 +179,8 @@ app.post("/airdrop", async (req, res) => {
     const kelvin = BigInt(Math.round((amount || 10) * KELVIN_PER_RLO));
     const sig = await client.requestAirdropAndConfirm(pk, kelvin);
     res.json({ success: true, signature: sig.signature });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -191,8 +191,8 @@ app.get("/balance/:pubkey", async (req, res) => {
     const pk = new PublicKey(req.params.pubkey);
     const bal = await client.getBalance(pk);
     res.json({ kelvin: bal.toString(), rlo: (Number(bal) / KELVIN_PER_RLO).toFixed(6) });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -248,7 +248,7 @@ app.post("/tokens", async (req, res) => {
 
     // Check creator has balance (at least 0.02 RLO for creation fee)
     const { PublicKey } = await import("@rialo/ts-cdk");
-    let pk: any;
+    let pk: InstanceType<typeof PublicKey>;
     try { pk = new PublicKey(creator); } catch {
       return res.status(400).json({ error: "Invalid creator pubkey" });
     }
@@ -277,8 +277,8 @@ app.post("/tokens", async (req, res) => {
     tokens.set(id, token);
     saveTokens(tokens);
     res.json({ success: true, token: { id, ...token } });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -346,8 +346,8 @@ app.post("/tokens/:id/buy", async (req, res) => {
         const txBytes = Buffer.from(signedTxBase64, "base64");
         const sig = await client.sendAndConfirmTransaction(txBytes);
         txHash = sig.signature || txHash;
-      } catch (e: any) {
-        console.warn("TX broadcast failed, recording as simulated:", e.message);
+      } catch (e: unknown) {
+        console.warn("TX broadcast failed, recording as simulated:", e instanceof Error ? e.message : String(e));
       }
     }
 
@@ -385,8 +385,8 @@ app.post("/tokens/:id/buy", async (req, res) => {
       currentPrice: newState.currentPrice,
       progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
     });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -425,8 +425,8 @@ app.post("/tokens/:id/sell", async (req, res) => {
         const txBytes = Buffer.from(signedTxBase64, "base64");
         const sig = await client.sendAndConfirmTransaction(txBytes);
         txHash = sig.signature || txHash;
-      } catch (e: any) {
-        console.warn("TX broadcast failed:", e.message);
+      } catch (e: unknown) {
+        console.warn("TX broadcast failed:", e instanceof Error ? e.message : String(e));
       }
     }
 
@@ -458,8 +458,8 @@ app.post("/tokens/:id/sell", async (req, res) => {
       currentPrice: newState.currentPrice,
       progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
     });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 

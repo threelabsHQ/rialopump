@@ -1,9 +1,9 @@
 import { useMemo } from "react";
-import type { Token } from "../types";
+import type { Token, TradeRecord } from "../types";
 
 interface BondingChartProps {
   token: Token;
-  trades?: any[];
+  trades?: TradeRecord[];
 }
 
 const spectral = "linear-gradient(90deg, #5fbeff, #af8ff4, #f05c6b)";
@@ -15,10 +15,10 @@ export function BondingChart({ token, trades = [] }: BondingChartProps) {
   // Build price history from trades
   const priceHistory = useMemo(() => {
     if (!trades.length) return [];
-    const points = trades.slice().reverse().map((t: any, i: number) => ({
+    const points = trades.slice().reverse().map((t, i) => ({
       i,
       price: t.price * KELVIN, // convert to RLO per token
-      type: t.type as "buy" | "sell",
+      type: t.type,
       time: t.timestamp,
     }));
     return points;
@@ -44,7 +44,7 @@ export function BondingChart({ token, trades = [] }: BondingChartProps) {
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     });
     return "M" + pts.join(" L");
-  }, [priceHistory, innerW, innerH]);
+  }, [priceHistory, innerW, innerH, pad.left, pad.top]);
 
   const lastPrice = priceHistory.length
     ? priceHistory[priceHistory.length - 1].price

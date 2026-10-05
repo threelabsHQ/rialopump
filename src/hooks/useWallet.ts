@@ -9,37 +9,50 @@ export function useWallet() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load from storage on mount
+  const refreshBalance = useCallback(
+    async (pubkey: string): Promise<{ rlo: number; kelvin: number } | null> => {
+      try {
+        const res = await api.balance(pubkey);
+        return { rlo: parseFloat(res.rlo), kelvin: parseInt(res.kelvin) };
+      } catch {
+        return null;
+      }
+    },
+    []
+  );
+
+  // Load from storage on mount and refresh balance asynchronously
+  // oxlint-disable-next-line react/set-state-in-effect -- initial hydration from localStorage is intentional
   useEffect(() => {
+    let cancelled = false;
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored) as WalletState;
-        setWallet(parsed);
-        // Refresh balance
-        refreshBalance(parsed.pubkey).then((bal) => {
-          if (bal !== null) {
-            setWallet((w) => w ? { ...w, balance: bal.rlo, balanceKelvin: bal.kelvin } : w);
-          }
-        }).catch(() => {});
+        if (!cancelled) setWallet(parsed);
+        // Async balance refresh after hydration
+        api.balance(parsed.pubkey)
+          .then((res) => {
+            if (!cancelled) {
+              setWallet((w) =>
+                w
+                  ? { ...w, balance: parseFloat(res.rlo), balanceKelvin: parseInt(res.kelvin) }
+                  : w
+              );
+            }
+          })
+          .catch(() => {});
       }
-    } catch {}
-  }, []);
-
-  const refreshBalance = useCallback(async (pubkey: string): Promise<{ rlo: number; kelvin: number } | null> => {
-    try {
-      const res = await api.balance(pubkey);
-      return { rlo: parseFloat(res.rlo), kelvin: parseInt(res.kelvin) };
     } catch {
-      return null;
+      // ignore localStorage / JSON parse errors
     }
-  }, []);
+    return () => { cancelled = true; };
+  }, []); // intentionally empty — runs once on mount
 
   const generateWallet = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // We'll derive the pubkey client-side using @noble libraries
       const { generateKeypairFromSecret } = await import("../utils/crypto");
       const secretHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
         .map((b) => b.toString(16).padStart(2, "0"))
@@ -54,43 +67,50 @@ export function useWallet() {
       setWallet(newWallet);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(newWallet));
       return newWallet;
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
       return null;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const importWallet = useCallback(async (secretHex: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const { generateKeypairFromSecret } = await import("../utils/crypto");
-      const pubkey = await generateKeypairFromSecret(secretHex);
-      const bal = await refreshBalance(pubkey);
-      const w: WalletState = {
-        pubkey,
-        secretHex,
-        balance: bal?.rlo || 0,
-        balanceKelvin: bal?.kelvin || 0,
-      };
-      setWallet(w);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(w));
-      return w;
-    } catch (e: any) {
-      setError(e.message);
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [refreshBalance]);
+  const importWallet = useCallback(
+    async (secretHex: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { generateKeypairFromSecret } = await import("../utils/crypto");
+        const pubkey = await generateKeypairFromSecret(secretHex);
+        const bal = await refreshBalance(pubkey);
+        const w: WalletState = {
+          pubkey,
+          secretHex,
+          balance: bal?.rlo ?? 0,
+          balanceKelvin: bal?.kelvin ?? 0,
+        };
+        setWallet(w);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(w));
+        return w;
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : String(e));
+        return null;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [refreshBalance]
+  );
 
   const refreshWalletBalance = useCallback(async () => {
     if (!wallet) return;
     const bal = await refreshBalance(wallet.pubkey);
     if (bal) {
-      const updated = { ...wallet, balance: bal.rlo, balanceKelvin: bal.kelvin };
+      const updated = {
+        ...wallet,
+        balance: bal.rlo,
+        balanceKelvin: bal.kelvin,
+      };
       setWallet(updated);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
     }
@@ -103,8 +123,8 @@ export function useWallet() {
     try {
       await api.airdrop(wallet.pubkey, 100);
       await refreshWalletBalance();
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }

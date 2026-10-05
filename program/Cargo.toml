@@ -1,0 +1,21 @@
+[package]
+name = "hugefun-program"
+version = "0.1.0"
+edition = "2021"
+description = "hugefun bonding-curve token factory program for Rialo devnet"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+no-entrypoint = []
+
+[dependencies]
+# Rialo's own program SDK — mirrors the Solana SDK API but targets RISC-V/PolkaVM.
+# rialo-s-program bundles account_info, pubkey, program_error, system_instruction, sysvar etc.
+rialo-s-program = "0.18"
+# Entrypoint macro lives in a separate crate
+rialo-s-program-entrypoint = "0.18"
+borsh = { version = "1", features = ["derive"] }

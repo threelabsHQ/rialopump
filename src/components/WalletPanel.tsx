@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { GlassCard } from "./ui/GlassCard";
-import { shortenAddress, formatRlo } from "../utils/crypto";
+import { shortenAddress } from "../utils/crypto";
 import { Wallet, Copy, ExternalLink, Droplets, LogOut, ChevronDown, Eye, EyeOff } from "lucide-react";
 import type { WalletState } from "../types";
 import { toast } from "sonner";
@@ -11,9 +11,9 @@ interface WalletPanelProps {
   loading: boolean;
   onGenerate: () => void;
   onImport: (secretHex: string) => void;
-  onAirdrop: () => void;
+  onAirdrop: () => void | Promise<void>;
   onDisconnect: () => void;
-  onRefreshBalance: () => void;
+  onRefreshBalance: () => void | Promise<void>;
 }
 
 export function WalletPanel({
@@ -25,7 +25,7 @@ export function WalletPanel({
   const [open, setOpen] = useState(false);
 
   const copy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`));
+    void navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`));
   };
 
   const handleImport = () => {
@@ -95,7 +95,7 @@ export function WalletPanel({
       {/* Header row */}
       <button
         className="w-full flex items-center justify-between p-4 cursor-pointer"
-        onClick={() => { setOpen(!open); onRefreshBalance(); }}
+        onClick={() => { setOpen(!open); void onRefreshBalance(); }}
       >
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(18,45,69,0.08)" }}>
@@ -152,7 +152,7 @@ export function WalletPanel({
           {/* Actions */}
           <div className="grid grid-cols-2 gap-2 pt-1">
             <button
-              onClick={onAirdrop}
+              onClick={() => { void onAirdrop(); }}
               disabled={loading}
               className={clsx(
                 "flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-semibold transition-all active:scale-[0.97]",

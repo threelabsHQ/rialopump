@@ -7,8 +7,8 @@ import { TradesTable } from "../components/TradesTable";
 import { TokenAvatar } from "../components/ui/TokenAvatar";
 import { GlassCard } from "../components/ui/GlassCard";
 import { ProgressBar } from "../components/ui/ProgressBar";
-import { shortenAddress, formatRlo, formatLargeNumber, timeAgo } from "../utils/crypto";
-import { ArrowLeft, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { shortenAddress, formatLargeNumber, timeAgo } from "../utils/crypto";
+import { ArrowLeft, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface TokenViewProps {
@@ -33,16 +33,17 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
       setToken(t);
       setTrades(trs);
       setError(null);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   }, [tokenId]);
 
-  useEffect(() => { load(); }, [load]);
+  // eslint-disable-next-line react/set-state-in-effect -- load() updates state only after async fetch
+  useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    const id = setInterval(load, 5_000);
+    const id = setInterval(() => { void load(); }, 5_000);
     return () => clearInterval(id);
   }, [load]);
 
@@ -102,7 +103,7 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
         // Mobile layout: stacked
         <div className="space-y-4">
           <BondingChart token={token} trades={trades} />
-          <TradePanel token={token} wallet={wallet} onTrade={load} />
+          <TradePanel token={token} wallet={wallet} onTrade={() => { void load(); }} />
           <TokenInfo token={token} trades={trades} />
           <TradesTable trades={trades} />
         </div>
@@ -115,7 +116,7 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
             <TradesTable trades={trades} />
           </div>
           <div className="space-y-4">
-            <TradePanel token={token} wallet={wallet} onTrade={load} />
+            <TradePanel token={token} wallet={wallet} onTrade={() => { void load(); }} />
           </div>
         </div>
       )}
@@ -124,7 +125,7 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
 }
 
 function TokenInfo({ token, trades }: { token: Token; trades: TradeRecord[] }) {
-  const copy = (text: string) => navigator.clipboard.writeText(text).then(() => toast.success("Copied"));
+  const copy = (text: string) => { void navigator.clipboard.writeText(text).then(() => toast.success("Copied")); };
   const KELVIN = 1_000_000_000;
 
   const stats = [

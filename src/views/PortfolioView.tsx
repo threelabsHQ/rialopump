@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { api } from "../api";
+import { api, type PortfolioHolding } from "../api";
 import type { WalletState } from "../types";
 import { GlassCard } from "../components/ui/GlassCard";
 import { TokenAvatar } from "../components/ui/TokenAvatar";
-import { formatRlo, formatLargeNumber } from "../utils/crypto";
+import { formatLargeNumber } from "../utils/crypto";
 import { Loader2, TrendingUp, TrendingDown, Briefcase } from "lucide-react";
 
 interface PortfolioViewProps {
@@ -12,16 +12,20 @@ interface PortfolioViewProps {
 }
 
 export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
-  const [holdings, setHoldings] = useState<any[]>([]);
+  const [holdings, setHoldings] = useState<PortfolioHolding[]>([]);
   const [loading, setLoading] = useState(false);
   const KELVIN = 1_000_000_000;
 
+  // oxlint-disable-next-line react/set-state-in-effect -- loading spinner before async fetch is intentional
   useEffect(() => {
     if (!wallet) return;
+    let cancelled = false;
     setLoading(true);
     api.portfolio(wallet.pubkey)
-      .then(setHoldings)
-      .finally(() => setLoading(false));
+      .then((data) => { if (!cancelled) setHoldings(data); })
+      .catch(() => { if (!cancelled) setHoldings([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [wallet]);
 
   if (!wallet) {
@@ -36,8 +40,8 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
     );
   }
 
-  const totalValue = holdings.reduce((s: number, h: any) => s + h.value, 0);
-  const totalPnl = holdings.reduce((s: number, h: any) => s + h.pnl, 0);
+  const totalValue = holdings.reduce((s, h) => s + h.value, 0);
+  const totalPnl = holdings.reduce((s, h) => s + h.pnl, 0);
 
   return (
     <div className="space-y-4">
@@ -72,7 +76,7 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
         </GlassCard>
       ) : (
         <div className="space-y-2">
-          {holdings.map((h: any) => {
+          {holdings.map((h) => {
             const pct = (h.value / totalValue) * 100;
             return (
               <GlassCard

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { GlassCard, InnerField } from "./ui/GlassCard";
 import { api } from "../api";
 import type { Token, WalletState, QuoteResult } from "../types";
@@ -10,7 +10,7 @@ import { clsx } from "clsx";
 interface TradePanelProps {
   token: Token;
   wallet: WalletState | null;
-  onTrade: () => void;
+  onTrade: () => void | Promise<void>;
 }
 
 type TxState = "idle" | "quoting" | "confirming" | "success" | "error";
@@ -22,7 +22,7 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
   const [txState, setTxState] = useState<TxState>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [debounceTimer, setDebounceTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const KELVIN = 1_000_000_000;
   const quickAmounts = tab === "buy"
@@ -47,11 +47,12 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
   }, [tab, token.id]);
 
   useEffect(() => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    const t = setTimeout(() => fetchQuote(amount), 400);
-    setDebounceTimer(t);
-    return () => clearTimeout(t);
-  }, [amount, tab]);
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => { void fetchQuote(amount); }, 400);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [amount, tab, fetchQuote]);
 
   const handleTrade = async () => {
     if (!wallet) { toast.error("Connect wallet first"); return; }
@@ -60,23 +61,23 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
     setTxState("confirming");
     setErrorMsg(null);
     try {
-      let result: any;
       if (tab === "buy") {
         const kelvin = Math.round(parseFloat(amount) * KELVIN);
-        result = await api.buy(token.id, wallet.pubkey, kelvin);
+        const result = await api.buy(token.id, wallet.pubkey, kelvin);
         toast.success(`Bought ${result.trade.tokenAmount.toLocaleString()} $${token.symbol}`);
+        setTxHash(result.trade.txHash);
       } else {
         const tokenAmt = parseFloat(amount);
-        result = await api.sell(token.id, wallet.pubkey, tokenAmt);
+        const result = await api.sell(token.id, wallet.pubkey, tokenAmt);
         toast.success(`Sold ${tokenAmt.toLocaleString()} $${token.symbol}`);
+        setTxHash(result.trade.txHash);
       }
-      setTxHash(result.trade.txHash);
       setTxState("success");
       setAmount("");
       setQuote(null);
-      onTrade();
-    } catch (e: any) {
-      setErrorMsg(e.message);
+      void onTrade();
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
       setTxState("error");
     }
   };
@@ -199,7 +200,7 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
 
       {/* CTA */}
       <button
-        onClick={handleTrade}
+        onClick={() => { void handleTrade(); }}
         disabled={isBusy || !amount || parseFloat(amount) <= 0 || txState === "success"}
         className={clsx(
           "w-full py-3.5 rounded-xl text-sm font-bold transition-all active:scale-[0.98] flex items-center justify-center gap-2",

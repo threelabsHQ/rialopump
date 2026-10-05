@@ -22,7 +22,7 @@ export function TradesTable({ trades }: TradesTableProps) {
       <div className="px-4 py-3 border-b" style={{ borderColor: "var(--border)" }}>
         <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Recent Trades</h3>
       </div>
-      <div className="divide-y" style={{ divideColor: "var(--border)" } as any}>
+      <div className="divide-y" style={{ ["--tw-divide-color" as string]: "var(--border)" }}>
         {trades.slice(0, 30).map((trade) => (
           <div key={trade.id} className="px-4 py-3 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">

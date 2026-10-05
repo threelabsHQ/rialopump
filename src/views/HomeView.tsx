@@ -24,18 +24,19 @@ export function HomeView({ onSelectToken, refreshTick }: HomeViewProps) {
       const list = await api.tokens();
       setTokens(list);
       setError(null);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [refreshTick, load]);
+  // eslint-disable-next-line react/set-state-in-effect -- load() updates state only after async fetch
+  useEffect(() => { void load(); }, [refreshTick, load]);
 
   // Auto-refresh every 10s
   useEffect(() => {
-    const id = setInterval(load, 10_000);
+    const id = setInterval(() => { void load(); }, 10_000);
     return () => clearInterval(id);
   }, [load]);
 
@@ -101,7 +102,7 @@ export function HomeView({ onSelectToken, refreshTick }: HomeViewProps) {
         <GlassCard className="p-6 text-center">
           <p className="text-sm font-semibold" style={{ color: "var(--danger)" }}>Failed to load</p>
           <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>{error}</p>
-          <button onClick={load} className="mt-3 text-xs px-4 py-2 rounded-xl" style={{ background: "var(--accent)", color: "white" }}>
+          <button onClick={() => { void load(); }} className="mt-3 text-xs px-4 py-2 rounded-xl" style={{ background: "var(--accent)", color: "white" }}>
             Retry
           </button>
         </GlassCard>

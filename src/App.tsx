@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "./hooks/useWallet";
 import { WalletPanel } from "./components/WalletPanel";
 import { HomeView } from "./views/HomeView";
@@ -9,7 +9,7 @@ import type { View } from "./types";
 import {
   Home, Rocket, Briefcase, Zap, Menu, X, ChevronUp
 } from "lucide-react";
-import { clsx } from "clsx";
+
 import { Toaster } from "sonner";
 
 const spectral = "linear-gradient(90deg, #5fbeff, #af8ff4, #f05c6b, #ffcd83, #7ef1b3)";
@@ -33,15 +33,15 @@ function ChainStatus() {
     const check = async () => {
       try {
         const res = await fetch("/api/chain");
-        const data = await res.json();
+        const data = (await res.json()) as { blockHeight: string };
         setConnected(true);
         setBlockHeight(parseInt(data.blockHeight).toLocaleString());
       } catch {
         setConnected(false);
       }
     };
-    check();
-    const id = setInterval(check, 15_000);
+    void check();
+    const id = setInterval(() => { void check(); }, 15_000);
     return () => clearInterval(id);
   }, []);
 
@@ -62,7 +62,7 @@ function ChainStatus() {
 export default function App() {
   const isMobile = useIsMobile();
   const {
-    wallet, loading: walletLoading, error: walletError,
+    wallet, loading: walletLoading, error: _walletError,
     generateWallet, importWallet, requestAirdrop, disconnect, refreshWalletBalance
   } = useWallet();
 
@@ -153,11 +153,11 @@ export default function App() {
               <WalletPanel
                 wallet={wallet}
                 loading={walletLoading}
-                onGenerate={generateWallet}
-                onImport={importWallet}
-                onAirdrop={requestAirdrop}
+                onGenerate={() => { void generateWallet(); }}
+                onImport={(s) => { void importWallet(s); }}
+                onAirdrop={() => { void requestAirdrop(); }}
                 onDisconnect={disconnect}
-                onRefreshBalance={refreshWalletBalance}
+                onRefreshBalance={() => { void refreshWalletBalance(); }}
               />
             </div>
           </div>
@@ -273,11 +273,11 @@ export default function App() {
           <WalletPanel
             wallet={wallet}
             loading={walletLoading}
-            onGenerate={generateWallet}
-            onImport={importWallet}
-            onAirdrop={requestAirdrop}
+            onGenerate={() => { void generateWallet(); }}
+            onImport={(s) => { void importWallet(s); }}
+            onAirdrop={() => { void requestAirdrop(); }}
             onDisconnect={disconnect}
-            onRefreshBalance={refreshWalletBalance}
+            onRefreshBalance={() => { void refreshWalletBalance(); }}
           />
         </div>
 

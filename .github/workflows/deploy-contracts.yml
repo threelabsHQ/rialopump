@@ -1,161 +1,94 @@
-name: Deploy Contracts — Rialo Devnet
+name: Deploy Program to Rialo Devnet
 
 on:
   push:
     branches: [main]
     paths:
-      # Only re-deploy when contract source or deploy scripts change
-      - "contracts/**"
-      - "foundry.toml"
-      - "remappings.txt"
+      - "program/**"
+      - "scripts/deploy-program.ts"
       - ".github/workflows/deploy-contracts.yml"
-  # Allow manual trigger from the Actions tab
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: "Dry run (simulate, no broadcast)"
-        required: false
-        default: "false"
+      force:
+        description: "Force deploy even without program changes"
         type: boolean
-      reuse_factory:
-        description: "Existing Create2Factory address (leave blank to redeploy)"
-        required: false
-        default: ""
+        default: false
 
 concurrency:
-  # Only one deploy at a time; do not cancel in-progress deploys
-  group: deploy-contracts-rialo
-  cancel-in-progress: false
+  group: deploy-program
+  cancel-in-progress: false  # never interrupt a live deploy
 
 jobs:
-  deploy:
-    name: Deploy to Rialo Devnet
+  build-and-deploy:
+    name: Build PolkaVM + Deploy to Rialo Devnet
     runs-on: ubuntu-latest
-
-    # Only run on the repo's own pushes, not from forks (secrets are not available there)
-    if: github.event_name == 'workflow_dispatch' || github.repository == github.event.repository.full_name
-
-    permissions:
-      contents: write  # needed to commit updated AGENTS.md with new addresses
+    environment: devnet
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Install Foundry ──────────────────────────────────────────────────────
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-
-      - name: Install Forge dependencies (lib/)
-        run: forge install
-
-      # ── Build ────────────────────────────────────────────────────────────────
-      - name: Build contracts
-        run: forge build --sizes
-        env:
-          RIALO_DEVNET_RPC: ${{ secrets.RIALO_DEVNET_RPC }}
-
-      # ── Run Forge tests before deploying ────────────────────────────────────
-      - name: Run Forge tests
-        run: forge test -vv
-        env:
-          RIALO_DEVNET_RPC: ${{ secrets.RIALO_DEVNET_RPC }}
-
-      # ── Deploy ───────────────────────────────────────────────────────────────
-      - name: Deploy DeployLaunchpad script
-        id: deploy
+      # ── Install rialoman + rialo toolchain ──────────────────────────────────
+      - name: Install rialoman
         run: |
-          set -eo pipefail
+          curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh | bash
+          echo "$HOME/.local/share/rialo/bin" >> "$GITHUB_PATH"
 
-          EXTRA_FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "::notice::DRY_RUN=true — no transactions will be broadcast"
-          else
-            EXTRA_FLAGS="--broadcast"
+      - name: Install Rialo stable release + Rust toolchain
+        run: |
+          rialoman install stable@latest
+          rialoman use stable@latest
+
+      # ── Cache ───────────────────────────────────────────────────────────────
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            program/target
+          key: rialo-polkavm-${{ runner.os }}-${{ hashFiles('program/Cargo.lock') }}
+          restore-keys: rialo-polkavm-${{ runner.os }}-
+
+      # ── Build ───────────────────────────────────────────────────────────────
+      - name: Build .polkavm binary
+        working-directory: program
+        run: cargo +rialo build --release
+
+      - name: Locate .polkavm artifact
+        id: artifact
+        run: |
+          path=$(find program/target -name "hugefun_program.polkavm" | head -1)
+          if [ -z "$path" ]; then
+            path=$(find program/target -name "*.polkavm" | head -1)
           fi
-
-          FACTORY_OVERRIDE=""
-          if [ -n "$REUSE_FACTORY" ]; then
-            FACTORY_OVERRIDE="CREATE2_FACTORY_ADDRESS=$REUSE_FACTORY"
+          if [ -z "$path" ]; then
+            echo "ERROR: no .polkavm file found" && exit 1
           fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "Found: $path ($(du -sh $path | cut -f1))"
 
-          # Run the deploy script; capture stdout for address extraction
-          OUTPUT=$(
-            env \
-              DEPLOYER_PRIVATE_KEY="$DEPLOYER_PRIVATE_KEY" \
-              RIALO_DEVNET_RPC="$RIALO_DEVNET_RPC" \
-              DRY_RUN="$DRY_RUN" \
-              $FACTORY_OVERRIDE \
-            forge script contracts/script/DeployLaunchpad.s.sol:DeployLaunchpad \
-              --rpc-url "$RIALO_DEVNET_RPC" \
-              --private-key "$DEPLOYER_PRIVATE_KEY" \
-              $EXTRA_FLAGS \
-              -vvv 2>&1 | tee /dev/stderr
-          )
+      # ── JS deps for deploy script ───────────────────────────────────────────
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
 
-          # Extract machine-readable addresses from script console.log output
-          FACTORY_ADDR=$(echo "$OUTPUT" | grep -oP '(?<=FACTORY=)0x[0-9a-fA-F]{40}' | tail -1)
-          echo "factory_address=${FACTORY_ADDR}" >> "$GITHUB_OUTPUT"
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
 
-          if [ -n "$FACTORY_ADDR" ]; then
-            echo "::notice::Create2Factory deployed at ${FACTORY_ADDR}"
-          fi
+      # ── Deploy ──────────────────────────────────────────────────────────────
+      - name: Deploy program to Rialo devnet
         env:
-          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
           RIALO_DEVNET_RPC: ${{ vars.RIALO_DEVNET_RPC || 'https://devnet.rialo.io:4101' }}
-          DRY_RUN: ${{ inputs.dry_run || 'false' }}
-          REUSE_FACTORY: ${{ inputs.reuse_factory || '' }}
+          DEPLOYER_SECRET_HEX: ${{ secrets.DEPLOYER_SECRET_HEX }}
+          PROGRAM_KEYPAIR_HEX: ${{ secrets.PROGRAM_KEYPAIR_HEX }}
+          POLKAVM_PATH: ${{ steps.artifact.outputs.path }}
+        run: bun run scripts/deploy-program.ts
 
-      # ── Record deployed addresses in AGENTS.md ───────────────────────────────
-      - name: Update AGENTS.md with deployed addresses
-        if: steps.deploy.outputs.factory_address != ''
-        run: |
-          FACTORY="${{ steps.deploy.outputs.factory_address }}"
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          COMMIT="${{ github.sha }}"
-
-          # Append or replace the Deployments section in AGENTS.md
-          python3 - <<'PYEOF'
-          import re, os, sys
-
-          factory = os.environ["FACTORY"]
-          timestamp = os.environ["TIMESTAMP"]
-          commit = os.environ["COMMIT"]
-
-          path = "AGENTS.md"
-          content = open(path).read()
-          section = f"""
-## Deployed Contracts — Rialo Devnet
-
-| Contract | Address | Deployed At | Commit |
-|---|---|---|---|
-| Create2Factory | `{factory}` | {timestamp} | {commit[:8]} |
-"""
-          # Replace existing section if present
-          content = re.sub(
-              r"\n## Deployed Contracts.*?(?=\n## |\Z)",
-              section,
-              content,
-              flags=re.DOTALL,
-          )
-          if "## Deployed Contracts" not in content:
-              content += section
-
-          open(path, "w").write(content)
-          print(f"Updated AGENTS.md with factory={factory}")
-          PYEOF
-        env:
-          FACTORY: ${{ steps.deploy.outputs.factory_address }}
-          TIMESTAMP: ${{ github.event.head_commit.timestamp }}
-          COMMIT: ${{ github.sha }}
-
+      # ── Commit deployed address back to repo ────────────────────────────────
       - name: Commit updated AGENTS.md
-        if: steps.deploy.outputs.factory_address != ''
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: EndBug/add-and-commit@v9
         with:
-          commit_message: "chore: update deployed contract addresses [skip ci]"
-          file_pattern: AGENTS.md
+          add: AGENTS.md
+          message: "chore: update deployed program ID [skip ci]"
+          default_author: github_actions
+          push: true

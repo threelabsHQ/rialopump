@@ -22,7 +22,7 @@ async function fallbackDerivePublicKey(secretBytes: Uint8Array): Promise<string>
   try {
     const key = await crypto.subtle.importKey(
       "raw",
-      secretBytes,
+      secretBytes.buffer as ArrayBuffer,
       { name: "Ed25519" },
       true,
       ["sign"]
@@ -34,7 +34,8 @@ async function fallbackDerivePublicKey(secretBytes: Uint8Array): Promise<string>
     }
   } catch {}
   // Last resort: deterministic pseudorandom from hash
-  const hash = await crypto.subtle.digest("SHA-256", secretBytes);
+  const buf = secretBytes.buffer.slice(secretBytes.byteOffset, secretBytes.byteOffset + secretBytes.byteLength);
+  const hash = await crypto.subtle.digest("SHA-256", buf as ArrayBuffer);
   return bytesToBase58(new Uint8Array(hash));
 }
 
