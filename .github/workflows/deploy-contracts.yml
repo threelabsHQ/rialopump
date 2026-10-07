@@ -127,48 +127,42 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Configure deployer keypair
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_contract) && secrets.RIALO_DEPLOY_KEY != '' }}
+      - name: Configure deployer keypair + airdrop + deploy
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_contract }}
         env:
           RIALO_DEPLOY_KEY: ${{ secrets.RIALO_DEPLOY_KEY }}
         run: |
           set -euo pipefail
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+
+          # Guard: skip deploy if no key secret
+          if [ -z "${RIALO_DEPLOY_KEY:-}" ]; then
+            echo "::notice::RIALO_DEPLOY_KEY secret is not set — skipping deploy."
+            echo "Set it under Settings → Secrets → Actions to enable automatic deployment."
+            exit 0
+          fi
+
+          # Configure keypair
           umask 077
           python3 scripts/configure-keypair.py
 
-      - name: Skip deploy — RIALO_DEPLOY_KEY not set
-        if: ${{ secrets.RIALO_DEPLOY_KEY == '' }}
-        run: |
-          echo "::notice::RIALO_DEPLOY_KEY secret is not set — skipping deploy. Add it under Settings → Secrets → Actions to enable automatic deployment."
-
-      - name: Airdrop deployer (devnet)
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_contract) && (github.event_name != 'workflow_dispatch' || inputs.network != 'mainnet') && secrets.RIALO_DEPLOY_KEY != '' }}
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          # Airdrop (devnet only)
           NET="${{ inputs.network || 'devnet' }}"
           KEYPAIR="$HOME/.config/rialo/id.json"
-          echo "Requesting airdrop on ${NET}..."
-          for i in 1 2 3; do
-            rialo client airdrop -n "${NET}" --amount 2 --keypair "${KEYPAIR}" 2>&1 && break || \
-            rialo airdrop 2 --keypair "${KEYPAIR}" --url "${NET}" 2>&1 && break || \
-            echo "Airdrop attempt $i failed, retrying..." && sleep 5
-          done
-          sleep 5
-          echo "Airdrop done."
+          if [ "${NET}" != "mainnet" ]; then
+            echo "Requesting airdrop on ${NET}..."
+            for i in 1 2 3; do
+              rialo client airdrop -n "${NET}" --amount 2 --keypair "${KEYPAIR}" 2>&1 && break || \
+              rialo airdrop 2 --keypair "${KEYPAIR}" --url "${NET}" 2>&1 && break || \
+              { echo "Airdrop attempt $i failed, retrying..."; sleep 5; }
+            done || true
+            sleep 5
+          fi
 
-      - name: Deploy program to Rialo
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_contract) && secrets.RIALO_DEPLOY_KEY != '' }}
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
-          NET="${{ inputs.network || 'devnet' }}"
-          KEYPAIR="$HOME/.config/rialo/id.json"
+          # Deploy
           BIN="${POLKAVM_PATH}"
-
           echo "Deploying: ${BIN}"
           echo "Network:   ${NET}"
-          echo "Keypair:   ${KEYPAIR}"
 
           rialo client program deploy -n "${NET}" "${BIN}" 2>&1 | tee /tmp/deploy.log
           if grep -qi "error:" /tmp/deploy.log && ! grep -qi "program id" /tmp/deploy.log; then
@@ -177,8 +171,10 @@ jobs:
             exit 1
           fi
 
-          PROGRAM_ID=$(grep -oiE 'program id[: ]+[A-Za-z0-9]{32,}' /tmp/deploy.log | grep -oE '[A-Za-z0-9]{32,}$' | head -1 || \
-                       grep -oE '[A-Za-z0-9]{32,44}' /tmp/deploy.log | tail -1 || echo "unknown")
+          PROGRAM_ID=$(grep -oiE 'program id[: ]+[A-Za-z0-9]{32,}' /tmp/deploy.log \
+                       | grep -oE '[A-Za-z0-9]{32,}$' | head -1 \
+                       || grep -oE '[A-Za-z0-9]{32,44}' /tmp/deploy.log | tail -1 \
+                       || echo "unknown")
           echo "PROGRAM_ID=${PROGRAM_ID}" >> "$GITHUB_ENV"
           echo "Deployed program ID: ${PROGRAM_ID}"
 
