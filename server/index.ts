@@ -1,11 +1,12 @@
 import express from "express";
 import cors from "cors";
-import { createRialoClient, RIALO_DEVNET_CHAIN, Keypair } from "@rialo/ts-cdk";
+import { createRialoClient, RIALO_DEVNET_CHAIN, Keypair, PublicKey } from "@rialo/ts-cdk";
 import type { RialoClient } from "@rialo/ts-cdk";
 import { randomBytes } from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
 import path from "path";
+import { deserializeTokenState, deriveTokenStatePda } from "./rialo-server";
 
 const app = express();
 app.use(cors());
@@ -13,6 +14,7 @@ app.use(express.json({ limit: "2mb" }));
 
 // ─── Rialo client ────────────────────────────────────────────────────────────
 const RPC_URL = process.env.RIALO_DEVNET_RPC || "https://devnet.rialo.io:4101";
+const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "AqSikYubk5DEygNhAZh1rSuVvrtNyHTUveLrze1QHn3R";
 const client: RialoClient = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
 
 // ─── Deployer keypair ─────────────────────────────────────────────────────────
@@ -24,8 +26,20 @@ if (secretHex) {
   console.log("[deployer] pubkey:", deployerKeypair.publicKey.toBase58());
 }
 
-// ─── In-memory token registry (persisted to JSON file) ───────────────────────
+// ─── Token registry (persisted) ───────────────────────────────────────────────
 const DATA_FILE = path.join(process.cwd(), "server", "tokens.json");
+
+interface TradeRecord {
+  id: string;
+  type: "buy" | "sell";
+  trader: string;
+  rloAmount: number;
+  tokenAmount: number;
+  price: number;
+  timestamp: number;
+  txHash: string;
+  onchain: boolean;
+}
 
 interface TokenRecord {
   id: string;
@@ -35,38 +49,22 @@ interface TokenRecord {
   imageUrl: string;
   creator: string;
   createdAt: number;
-  // Bonding curve state
-  rloSupply: number;      // RLO in the pool (in kelvin)
-  tokenSupply: number;    // tokens minted so far
-  totalSupply: number;    // max supply: 1_000_000_000
-  graduated: boolean;     // reached 800M tokens = graduated
+  // Canonical state comes from chain; these are cached/fallback values
+  tokenSupply: number;
+  totalSupply: number;
+  graduated: boolean;
   trades: TradeRecord[];
-  marketCap: number;      // in RLO (kelvin)
+  marketCap: number;
+  // Onchain: true means CreateToken was submitted onchain
+  onchain: boolean;
+  // token_id bytes as hex (16 chars = 16 ascii bytes)
+  tokenIdHex: string;
 }
-
-interface TradeRecord {
-  id: string;
-  type: "buy" | "sell";
-  trader: string;
-  rloAmount: number;    // kelvin
-  tokenAmount: number;
-  price: number;        // RLO per token
-  timestamp: number;
-  txHash: string;
-}
-
-// KELVIN_PER_RLO = 1_000_000_000
-const KELVIN_PER_RLO = 1_000_000_000;
-const MAX_TOKEN_SUPPLY = 1_000_000_000;
-const GRADUATION_SUPPLY = 800_000_000; // 80% = graduated to full DEX
-const INITIAL_VIRTUAL_RLO = 30 * KELVIN_PER_RLO; // 30 RLO virtual liquidity
-const INITIAL_VIRTUAL_TOKENS = 1_073_000_191; // virtual token reserve (pump.fun style)
-const PLATFORM_FEE_BPS = 100; // 1%
 
 function loadTokens(): Map<string, TokenRecord> {
   try {
     if (fs.existsSync(DATA_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
+      const raw = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as Record<string, TokenRecord>;
       return new Map(Object.entries(raw));
     }
   } catch {}
@@ -86,19 +84,16 @@ function saveTokens(tokens: Map<string, TokenRecord>) {
 
 const tokens: Map<string, TokenRecord> = loadTokens();
 
-// ─── Bonding curve math (constant-product AMM, pump.fun style) ───────────────
-// Uses x * y = k with virtual reserves
-function getPrice(virtualRlo: number, virtualTokens: number): number {
-  // Price in kelvin per token
-  return virtualRlo / virtualTokens;
-}
+// ─── Constants ────────────────────────────────────────────────────────────────
+const KELVIN_PER_RLO = 1_000_000_000;
+const MAX_TOKEN_SUPPLY = 1_000_000_000;
+const GRADUATION_SUPPLY = 800_000_000;
+const INITIAL_VIRTUAL_RLO = 30 * KELVIN_PER_RLO;
+const INITIAL_VIRTUAL_TOKENS = 1_073_000_191;
+const PLATFORM_FEE_BPS = 100;
 
-function calcBuyTokens(
-  rloIn: number,           // kelvin, after fee
-  virtualRlo: number,
-  virtualTokens: number
-): { tokensOut: number; newVirtualRlo: number; newVirtualTokens: number } {
-  // constant product: (virtualRlo + rloIn) * (virtualTokens - tokensOut) = k
+// ─── Bonding curve math ───────────────────────────────────────────────────────
+function calcBuyTokens(rloIn: number, virtualRlo: number, virtualTokens: number) {
   const k = virtualRlo * virtualTokens;
   const newVirtualRlo = virtualRlo + rloIn;
   const newVirtualTokens = k / newVirtualRlo;
@@ -106,12 +101,7 @@ function calcBuyTokens(
   return { tokensOut: Math.floor(tokensOut), newVirtualRlo, newVirtualTokens };
 }
 
-function calcSellRlo(
-  tokensIn: number,
-  virtualRlo: number,
-  virtualTokens: number
-): { rloOut: number; newVirtualRlo: number; newVirtualTokens: number } {
-  // constant product: (virtualTokens + tokensIn) * (virtualRlo - rloOut) = k
+function calcSellRlo(tokensIn: number, virtualRlo: number, virtualTokens: number) {
   const k = virtualRlo * virtualTokens;
   const newVirtualTokens = virtualTokens + tokensIn;
   const newVirtualRlo = k / newVirtualTokens;
@@ -119,44 +109,61 @@ function calcSellRlo(
   return { rloOut: Math.floor(rloOut), newVirtualRlo, newVirtualTokens };
 }
 
-function buildTokenState(t: TokenRecord): {
-  virtualRlo: number;
-  virtualTokens: number;
-  currentPrice: number;
-} {
-  // Rebuild virtual reserves from initial + all trades
+function buildVirtualState(t: TokenRecord) {
   let vRlo = INITIAL_VIRTUAL_RLO;
   let vTokens = INITIAL_VIRTUAL_TOKENS;
   for (const trade of t.trades) {
     if (trade.type === "buy") {
       const fee = Math.floor(trade.rloAmount * PLATFORM_FEE_BPS / 10000);
-      const rloAfterFee = trade.rloAmount - fee;
-      const result = calcBuyTokens(rloAfterFee, vRlo, vTokens);
-      vRlo = result.newVirtualRlo;
-      vTokens = result.newVirtualTokens;
+      const r = calcBuyTokens(trade.rloAmount - fee, vRlo, vTokens);
+      vRlo = r.newVirtualRlo; vTokens = r.newVirtualTokens;
     } else {
-      const result = calcSellRlo(trade.tokenAmount, vRlo, vTokens);
-      vRlo = result.newVirtualRlo;
-      vTokens = result.newVirtualTokens;
+      const r = calcSellRlo(trade.tokenAmount, vRlo, vTokens);
+      vRlo = r.newVirtualRlo; vTokens = r.newVirtualTokens;
     }
   }
-  return { virtualRlo: vRlo, virtualTokens: vTokens, currentPrice: getPrice(vRlo, vTokens) };
+  return { virtualRlo: vRlo, virtualTokens: vTokens, currentPrice: vRlo / vTokens };
 }
 
-// ─── API Routes ───────────────────────────────────────────────────────────────
+// ─── Fetch live onchain state and merge into token record ────────────────────
+async function syncOnchainState(t: TokenRecord): Promise<void> {
+  if (!t.onchain) return;
+  try {
+    const tokenIdBytes = tokenIdToBytes(t.tokenIdHex);
+    const { pda } = deriveTokenStatePda(tokenIdBytes, new PublicKey(PROGRAM_ID_STR));
+    const info = await client.getAccountInfo(pda);
+    if (!info?.data) return;
+    const data = info.data instanceof Uint8Array
+      ? info.data
+      : new Uint8Array(Buffer.from(info.data as string, "base64"));
+    const state = deserializeTokenState(data);
+    t.tokenSupply = Number(state.tokenSupply);
+    t.graduated = state.graduated;
+    const vRlo = Number(state.virtualRlo);
+    const vTokens = Number(state.virtualTokens);
+    const price = vTokens > 0 ? vRlo / vTokens : 0;
+    t.marketCap = Math.round(price * t.tokenSupply);
+  } catch {
+    // keep cached values if chain read fails
+  }
+}
 
-// Health
+function tokenIdToBytes(idHex: string): Uint8Array {
+  const padded = idHex.slice(0, 16).padEnd(16, "\0");
+  return new Uint8Array(padded.split("").map((c) => c.charCodeAt(0)));
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", rpc: RPC_URL });
+  res.json({ status: "ok", rpc: RPC_URL, programId: PROGRAM_ID_STR });
 });
 
-// Deployer public key
 app.get("/deployer", (_req, res) => {
   if (!deployerKeypair) return res.status(503).json({ error: "No deployer key" });
   res.json({ pubkey: deployerKeypair.publicKey.toBase58() });
 });
 
-// Chain info
 app.get("/chain", async (_req, res) => {
   try {
     const [height, epoch] = await Promise.all([
@@ -169,25 +176,21 @@ app.get("/chain", async (_req, res) => {
   }
 });
 
-// Airdrop (devnet only)
 app.post("/airdrop", async (req, res) => {
   try {
-    const { pubkey, amount } = req.body;
+    const { pubkey, amount } = req.body as { pubkey?: string; amount?: number };
     if (!pubkey) return res.status(400).json({ error: "pubkey required" });
-    const { PublicKey } = await import("@rialo/ts-cdk");
     const pk = new PublicKey(pubkey);
-    const kelvin = BigInt(Math.round((amount || 10) * KELVIN_PER_RLO));
+    const kelvin = BigInt(Math.round((amount || 1) * KELVIN_PER_RLO));
     const sig = await client.requestAirdropAndConfirm(pk, kelvin);
-    res.json({ success: true, signature: sig.signature });
+    res.json({ success: true, signature: sig.signature ?? sig.toString() });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
-// Get balance
 app.get("/balance/:pubkey", async (req, res) => {
   try {
-    const { PublicKey } = await import("@rialo/ts-cdk");
     const pk = new PublicKey(req.params.pubkey);
     const bal = await client.getBalance(pk);
     res.json({ kelvin: bal.toString(), rlo: (Number(bal) / KELVIN_PER_RLO).toFixed(6) });
@@ -196,12 +199,16 @@ app.get("/balance/:pubkey", async (req, res) => {
   }
 });
 
-// List tokens
-app.get("/tokens", (req, res) => {
-  const list = Array.from(tokens.values())
+// List tokens — sync onchain state in background
+app.get("/tokens", async (_req, res) => {
+  const list = Array.from(tokens.values());
+  // Sync onchain states in parallel (best-effort, don't block response)
+  await Promise.allSettled(list.map((t) => syncOnchainState(t)));
+
+  const result = list
     .sort((a, b) => b.marketCap - a.marketCap)
     .map((t) => {
-      const { currentPrice } = buildTokenState(t);
+      const { currentPrice } = buildVirtualState(t);
       return {
         id: t.id,
         name: t.name,
@@ -215,165 +222,195 @@ app.get("/tokens", (req, res) => {
         graduated: t.graduated,
         tradeCount: t.trades.length,
         currentPrice,
-        marketCap: Math.round(currentPrice * t.tokenSupply),
+        marketCap: t.marketCap,
         progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
+        onchain: t.onchain,
       };
     });
-  res.json(list);
+  res.json(result);
 });
 
-// Get single token
-app.get("/tokens/:id", (req, res) => {
+app.get("/tokens/:id", async (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
-  const state = buildTokenState(t);
+  await syncOnchainState(t);
+  const state = buildVirtualState(t);
   res.json({
     ...t,
+    trades: undefined,
     currentPrice: state.currentPrice,
-    marketCap: Math.round(state.currentPrice * t.tokenSupply),
+    marketCap: t.marketCap,
     progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
     virtualRlo: state.virtualRlo,
+    tradeCount: t.trades.length,
+    onchain: t.onchain,
   });
 });
 
-// Create token
+// Create token — accepts a signed transaction from the browser
 app.post("/tokens", async (req, res) => {
   try {
-    const { name, symbol, description, imageUrl, creator } = req.body;
+    const { name, symbol, description, imageUrl, creator, signedTxBase64, tokenIdHex } = req.body as {
+      name?: string;
+      symbol?: string;
+      description?: string;
+      imageUrl?: string;
+      creator?: string;
+      signedTxBase64?: string;
+      tokenIdHex?: string;
+    };
+
     if (!name || !symbol || !creator) {
       return res.status(400).json({ error: "name, symbol, creator required" });
     }
     if (symbol.length > 10) return res.status(400).json({ error: "symbol max 10 chars" });
     if (name.length > 32) return res.status(400).json({ error: "name max 32 chars" });
 
-    // Check creator has balance (at least 0.02 RLO for creation fee)
-    const { PublicKey } = await import("@rialo/ts-cdk");
-    let pk: InstanceType<typeof PublicKey>;
+    let pk: PublicKey;
     try { pk = new PublicKey(creator); } catch {
       return res.status(400).json({ error: "Invalid creator pubkey" });
     }
+
+    // Check balance
     const balance = await client.getBalance(pk);
-    const minRequired = BigInt(Math.round(0.02 * KELVIN_PER_RLO));
+    const minRequired = BigInt(Math.round(0.05 * KELVIN_PER_RLO));
     if (balance < minRequired) {
-      return res.status(400).json({ error: "Insufficient balance. Need at least 0.02 RLO to create a token. Use /airdrop to get test RLO." });
+      return res.status(400).json({ error: "Insufficient balance. Need at least 0.05 RLO. Use /airdrop to get test RLO." });
     }
 
-    const id = uuidv4().replace(/-/g, "").slice(0, 16);
+    // Broadcast the signed CreateToken tx
+    let txHash = "";
+    let onchain = false;
+    const idHex = tokenIdHex || uuidv4().replace(/-/g, "").slice(0, 16);
+
+    if (signedTxBase64) {
+      try {
+        const txBytes = Buffer.from(signedTxBase64, "base64");
+        const sig = await client.sendAndConfirmTransaction(txBytes);
+        txHash = sig.signature ?? sig.toString();
+        onchain = true;
+        console.log("[create] onchain tx:", txHash);
+      } catch (e: unknown) {
+        console.warn("[create] tx failed:", e instanceof Error ? e.message : String(e));
+        return res.status(400).json({ error: `Onchain transaction failed: ${e instanceof Error ? e.message : String(e)}` });
+      }
+    }
+
     const token: TokenRecord = {
-      id,
+      id: idHex,
       name: name.trim(),
       symbol: symbol.trim().toUpperCase(),
       description: (description || "").trim(),
       imageUrl: imageUrl || "",
       creator,
       createdAt: Date.now(),
-      rloSupply: INITIAL_VIRTUAL_RLO,
       tokenSupply: 0,
       totalSupply: MAX_TOKEN_SUPPLY,
       graduated: false,
       trades: [],
       marketCap: 0,
+      onchain,
+      tokenIdHex: idHex,
     };
-    tokens.set(id, token);
+
+    tokens.set(idHex, token);
     saveTokens(tokens);
-    res.json({ success: true, token: { id, ...token } });
+    res.json({ success: true, token: { ...token, txHash }, trades: undefined });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
-// Quote buy
+// Quote endpoints (pure math, no chain read needed)
 app.post("/tokens/:id/quote-buy", (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
   if (t.graduated) return res.status(400).json({ error: "Token graduated" });
-  const { rloAmount } = req.body;
+  const { rloAmount } = req.body as { rloAmount?: number };
   if (!rloAmount || rloAmount <= 0) return res.status(400).json({ error: "rloAmount required (kelvin)" });
-  const state = buildTokenState(t);
+  const state = buildVirtualState(t);
   const fee = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10000);
-  const rloAfterFee = rloAmount - fee;
-  const { tokensOut } = calcBuyTokens(rloAfterFee, state.virtualRlo, state.virtualTokens);
-  const limitedTokens = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
-  const price = rloAmount / limitedTokens;
-  res.json({ tokensOut: limitedTokens, fee, price, currentPrice: state.currentPrice });
+  const { tokensOut } = calcBuyTokens(rloAmount - fee, state.virtualRlo, state.virtualTokens);
+  const limited = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
+  res.json({ tokensOut: limited, fee, price: rloAmount / Math.max(limited, 1), currentPrice: state.currentPrice });
 });
 
-// Quote sell
 app.post("/tokens/:id/quote-sell", (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
   if (t.graduated) return res.status(400).json({ error: "Token graduated" });
-  const { tokenAmount } = req.body;
+  const { tokenAmount } = req.body as { tokenAmount?: number };
   if (!tokenAmount || tokenAmount <= 0) return res.status(400).json({ error: "tokenAmount required" });
-  const state = buildTokenState(t);
+  const state = buildVirtualState(t);
   const { rloOut } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
   const fee = Math.floor(rloOut * PLATFORM_FEE_BPS / 10000);
-  const rloAfterFee = rloOut - fee;
-  const price = rloAfterFee / tokenAmount;
-  res.json({ rloOut: rloAfterFee, fee, price, currentPrice: state.currentPrice });
+  res.json({ rloOut: rloOut - fee, fee, price: (rloOut - fee) / Math.max(tokenAmount, 1), currentPrice: state.currentPrice });
 });
 
-// Execute buy (signed by user — in devnet we accept signed tx bytes or simulate)
+// Execute buy — receives signed tx from browser, broadcasts, records
 app.post("/tokens/:id/buy", async (req, res) => {
   try {
     const t = tokens.get(req.params.id);
     if (!t) return res.status(404).json({ error: "Token not found" });
     if (t.graduated) return res.status(400).json({ error: "Token graduated" });
 
-    const { trader, rloAmount, signedTxBase64 } = req.body;
+    const { trader, rloAmount, signedTxBase64 } = req.body as {
+      trader?: string;
+      rloAmount?: number;
+      signedTxBase64?: string;
+    };
     if (!trader || !rloAmount) return res.status(400).json({ error: "trader and rloAmount required" });
 
-    // Verify trader has enough balance
-    const { PublicKey } = await import("@rialo/ts-cdk");
-    const pk = new PublicKey(trader);
-    const balance = await client.getBalance(pk);
-    if (Number(balance) < rloAmount) {
-      return res.status(400).json({ error: "Insufficient RLO balance" });
-    }
+    // Broadcast signed tx (required for real onchain trades)
+    let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 16);
+    let onchain = false;
 
-    const state = buildTokenState(t);
-    const fee = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10000);
-    const rloAfterFee = rloAmount - fee;
-    const { tokensOut } = calcBuyTokens(rloAfterFee, state.virtualRlo, state.virtualTokens);
-    const limitedTokens = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
-
-    if (limitedTokens <= 0) return res.status(400).json({ error: "No tokens available" });
-
-    // In devnet: accept the tx bytes and broadcast, or simulate if no tx provided
-    let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 32);
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
         const sig = await client.sendAndConfirmTransaction(txBytes);
-        txHash = sig.signature || txHash;
+        txHash = sig.signature ?? sig.toString();
+        onchain = true;
       } catch (e: unknown) {
-        console.warn("TX broadcast failed, recording as simulated:", e instanceof Error ? e.message : String(e));
+        return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
+      }
+    } else {
+      // No signed tx: verify balance at minimum
+      const pk = new PublicKey(trader);
+      const balance = await client.getBalance(pk);
+      if (Number(balance) < rloAmount) {
+        return res.status(400).json({ error: "Insufficient RLO balance" });
       }
     }
 
-    const price = rloAmount / limitedTokens;
+    // Sync from chain if onchain, else use local math
+    if (onchain) await syncOnchainState(t);
+    const state = buildVirtualState(t);
+    const fee = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10000);
+    const { tokensOut } = calcBuyTokens(rloAmount - fee, state.virtualRlo, state.virtualTokens);
+    const limitedTokens = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
+    if (limitedTokens <= 0) return res.status(400).json({ error: "No tokens available" });
+
     const trade: TradeRecord = {
       id: uuidv4().replace(/-/g, "").slice(0, 16),
       type: "buy",
       trader,
       rloAmount,
       tokenAmount: limitedTokens,
-      price,
+      price: rloAmount / limitedTokens,
       timestamp: Date.now(),
       txHash,
+      onchain,
     };
 
     t.trades.push(trade);
-    t.tokenSupply += limitedTokens;
-    t.rloSupply += rloAfterFee;
-    const newState = buildTokenState(t);
-    t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
-
-    // Check graduation
-    if (t.tokenSupply >= GRADUATION_SUPPLY) {
-      t.graduated = true;
+    if (!onchain) {
+      // Update local state only for sim trades
+      t.tokenSupply += limitedTokens;
+      if (t.tokenSupply >= GRADUATION_SUPPLY) t.graduated = true;
     }
-
+    const newState = buildVirtualState(t);
+    t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
     tokens.set(t.id, t);
     saveTokens(tokens);
 
@@ -397,57 +434,60 @@ app.post("/tokens/:id/sell", async (req, res) => {
     if (!t) return res.status(404).json({ error: "Token not found" });
     if (t.graduated) return res.status(400).json({ error: "Token graduated" });
 
-    const { trader, tokenAmount, signedTxBase64 } = req.body;
+    const { trader, tokenAmount, signedTxBase64 } = req.body as {
+      trader?: string;
+      tokenAmount?: number;
+      signedTxBase64?: string;
+    };
     if (!trader || !tokenAmount) return res.status(400).json({ error: "trader and tokenAmount required" });
 
-    // Check trader held tokens
-    const traderBought = t.trades
-      .filter((tr) => tr.trader === trader && tr.type === "buy")
-      .reduce((sum, tr) => sum + tr.tokenAmount, 0);
-    const traderSold = t.trades
-      .filter((tr) => tr.trader === trader && tr.type === "sell")
-      .reduce((sum, tr) => sum + tr.tokenAmount, 0);
-    const traderBalance = traderBought - traderSold;
-    if (traderBalance < tokenAmount) {
-      return res.status(400).json({ error: `Insufficient token balance. You hold ${traderBalance} tokens.` });
-    }
+    let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 16);
+    let onchain = false;
 
-    const state = buildTokenState(t);
-    const { rloOut } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
-    const fee = Math.floor(rloOut * PLATFORM_FEE_BPS / 10000);
-    const rloAfterFee = rloOut - fee;
-
-    if (rloAfterFee <= 0) return res.status(400).json({ error: "Nothing to receive" });
-
-    let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 32);
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
         const sig = await client.sendAndConfirmTransaction(txBytes);
-        txHash = sig.signature || txHash;
+        txHash = sig.signature ?? sig.toString();
+        onchain = true;
       } catch (e: unknown) {
-        console.warn("TX broadcast failed:", e instanceof Error ? e.message : String(e));
+        return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
+      }
+    } else {
+      // sim: check local balance
+      const traderBal =
+        t.trades.filter((tr) => tr.trader === trader && tr.type === "buy").reduce((s, tr) => s + tr.tokenAmount, 0) -
+        t.trades.filter((tr) => tr.trader === trader && tr.type === "sell").reduce((s, tr) => s + tr.tokenAmount, 0);
+      if (traderBal < tokenAmount) {
+        return res.status(400).json({ error: `Insufficient token balance. You hold ${traderBal}.` });
       }
     }
 
-    const price = rloAfterFee / tokenAmount;
+    if (onchain) await syncOnchainState(t);
+    const state = buildVirtualState(t);
+    const { rloOut } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
+    const fee = Math.floor(rloOut * PLATFORM_FEE_BPS / 10000);
+    const rloAfterFee = rloOut - fee;
+    if (rloAfterFee <= 0) return res.status(400).json({ error: "Nothing to receive" });
+
     const trade: TradeRecord = {
       id: uuidv4().replace(/-/g, "").slice(0, 16),
       type: "sell",
       trader,
       rloAmount: rloAfterFee,
       tokenAmount,
-      price,
+      price: rloAfterFee / tokenAmount,
       timestamp: Date.now(),
       txHash,
+      onchain,
     };
 
     t.trades.push(trade);
-    t.tokenSupply -= tokenAmount;
-    t.rloSupply -= rloAfterFee;
-    const newState = buildTokenState(t);
+    if (!onchain) {
+      t.tokenSupply -= tokenAmount;
+    }
+    const newState = buildVirtualState(t);
     t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
-
     tokens.set(t.id, t);
     saveTokens(tokens);
 
@@ -463,49 +503,38 @@ app.post("/tokens/:id/sell", async (req, res) => {
   }
 });
 
-// Token trades
 app.get("/tokens/:id/trades", (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
-  const trades = [...t.trades].reverse().slice(0, 100);
-  res.json(trades);
+  res.json([...t.trades].reverse().slice(0, 100));
 });
 
-// Trader portfolio
 app.get("/portfolio/:pubkey", (req, res) => {
   const { pubkey } = req.params;
-  const holdings: Array<{ token: TokenRecord; balance: number; value: number; pnl: number }> = [];
+  const holdings: Array<{ token: Omit<TokenRecord, "trades">; balance: number; value: number; pnl: number }> = [];
   for (const t of tokens.values()) {
     const bought = t.trades.filter((tr) => tr.trader === pubkey && tr.type === "buy");
     const sold = t.trades.filter((tr) => tr.trader === pubkey && tr.type === "sell");
-    const tokenBalance = bought.reduce((s, tr) => s + tr.tokenAmount, 0)
-      - sold.reduce((s, tr) => s + tr.tokenAmount, 0);
-    if (tokenBalance > 0) {
-      const state = buildTokenState(t);
-      const value = Math.round(state.currentPrice * tokenBalance);
+    const tokenBal = bought.reduce((s, tr) => s + tr.tokenAmount, 0) - sold.reduce((s, tr) => s + tr.tokenAmount, 0);
+    if (tokenBal > 0) {
+      const state = buildVirtualState(t);
+      const value = Math.round(state.currentPrice * tokenBal);
       const spent = bought.reduce((s, tr) => s + tr.rloAmount, 0);
       const received = sold.reduce((s, tr) => s + tr.rloAmount, 0);
-      const pnl = value + received - spent;
-      holdings.push({ token: t, balance: tokenBalance, value, pnl });
+      const { trades: _trades, ...tokenWithoutTrades } = t;
+      void _trades;
+      holdings.push({ token: tokenWithoutTrades, balance: tokenBal, value, pnl: value + received - spent });
     }
   }
   res.json(holdings);
 });
 
-// Generate new wallet keypair (browser users)
 app.post("/wallet/generate", (_req, res) => {
   const secret = randomBytes(32);
-  // We can't use @rialo/ts-cdk Keypair here without async import, just return secret bytes
-  // Client will reconstruct using CDK
-  res.json({
-    secretHex: secret.toString("hex"),
-    note: "Store this secret safely. It is your wallet private key on Rialo devnet.",
-  });
+  res.json({ secretHex: secret.toString("hex"), note: "Store safely — this is your wallet key on Rialo devnet." });
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`[rialo-launchpad] Server running on :${PORT}`);
-  console.log(`[rialo-launchpad] Rialo devnet RPC: ${RPC_URL}`);
+  console.log(`[rialo-launchpad] Server on :${PORT} | Program: ${PROGRAM_ID_STR}`);
 });

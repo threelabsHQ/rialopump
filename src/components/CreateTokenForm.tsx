@@ -4,8 +4,10 @@ import { TokenAvatar } from "./ui/TokenAvatar";
 import { api } from "../api";
 import type { WalletState } from "../types";
 import { toast } from "sonner";
-import { Loader2, Rocket, Upload } from "lucide-react";
+import { Loader2, Rocket, Upload, ExternalLink } from "lucide-react";
 import { clsx } from "clsx";
+import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes } from "../rialo/chain";
+import { buildCreateTokenIx } from "../rialo/program";
 
 interface CreateTokenFormProps {
   wallet: WalletState | null;
@@ -13,6 +15,7 @@ interface CreateTokenFormProps {
 }
 
 const spectral = "linear-gradient(90deg, #5fbeff, #af8ff4, #f05c6b, #ffcd83, #7ef1b3)";
+const EXPLORER_BASE = "https://rialo-explorer-devnet-direct.vercel.app";
 
 export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
   const [name, setName] = useState("");
@@ -21,8 +24,15 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
   const [imageUrl, setImageUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [txHash, setTxHash] = useState<string | null>(null);
 
   const valid = name.trim().length > 0 && symbol.trim().length > 0;
+
+  // Generate a deterministic 16-char token ID from name+symbol
+  function makeTokenId(n: string, s: string): string {
+    const raw = (n + s + Date.now().toString()).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    return raw.slice(0, 16).padEnd(16, "0");
+  }
 
   const handleCreate = async () => {
     if (!wallet) { toast.error("Connect a wallet first"); return; }
@@ -32,15 +42,37 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
 
     setLoading(true);
     setError(null);
+    setTxHash(null);
+
     try {
+      const tokenIdHex = makeTokenId(name, symbol);
+      const tokenIdBytes = tokenIdToBytes(tokenIdHex);
+      const keypair = keypairFromHex(wallet.secretHex);
+
+      // Build and sign the CreateToken instruction
+      const ix = buildCreateTokenIx({
+        tokenId: tokenIdBytes,
+        name: name.trim(),
+        symbol: symbol.trim().toUpperCase(),
+        description: description.trim(),
+        creator: keypair.publicKey,
+      });
+      const signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+
+      // Send to server (which broadcasts and records)
       const result = await api.createToken({
         name: name.trim(),
         symbol: symbol.trim().toUpperCase(),
         description: description.trim(),
         imageUrl: imageUrl.trim(),
         creator: wallet.pubkey,
+        signedTxBase64,
+        tokenIdHex,
       });
-      toast.success(`${name} ($${symbol}) launched!`);
+
+      const hash = (result.token as unknown as Record<string, string>).txHash;
+      if (hash) setTxHash(hash);
+      toast.success(`${name} ($${symbol.toUpperCase()}) launched onchain!`);
       onCreated(result.token.id);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -53,7 +85,7 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
 
   return (
     <div className="space-y-4">
-      {/* Preview card */}
+      {/* Live preview */}
       <GlassCard className="overflow-hidden">
         <div className="h-1" style={{ background: spectral }} />
         <div className="p-4">
@@ -63,9 +95,7 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
               <p className="display text-lg font-bold" style={{ color: "var(--ink)", letterSpacing: "-0.02em" }}>
                 {name || "Token Name"}
               </p>
-              <p className="text-sm font-semibold" style={{ color: "var(--muted)" }}>
-                ${symbol || "SYMBOL"}
-              </p>
+              <p className="text-sm font-semibold" style={{ color: "var(--muted)" }}>${symbol || "SYMBOL"}</p>
               <p className="text-xs mt-0.5" style={{ color: "var(--subtle)" }}>
                 {description || "Token description appears here"}
               </p>
@@ -76,9 +106,7 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
 
       {/* Form */}
       <GlassCard className="p-4 space-y-3">
-        <h2 className="display text-base font-bold" style={{ color: "var(--ink)" }}>
-          Launch Token
-        </h2>
+        <h2 className="display text-base font-bold" style={{ color: "var(--ink)" }}>Launch Token</h2>
 
         <div className="space-y-1">
           <label className="text-xs font-medium" style={{ color: "var(--muted)" }}>Token Name *</label>
@@ -96,7 +124,9 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs font-medium" style={{ color: "var(--muted)" }}>Symbol * <span style={{ color: "var(--subtle)" }}>(max 10 chars)</span></label>
+          <label className="text-xs font-medium" style={{ color: "var(--muted)" }}>
+            Symbol * <span style={{ color: "var(--subtle)" }}>(max 10 chars)</span>
+          </label>
           <InnerField>
             <input
               type="text"
@@ -123,13 +153,13 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
               style={{ color: "var(--ink)" }}
             />
           </InnerField>
-          <p className="text-xs text-right tabular-nums" style={{ color: "var(--subtle)" }}>
-            {description.length}/280
-          </p>
+          <p className="text-xs text-right tabular-nums" style={{ color: "var(--subtle)" }}>{description.length}/280</p>
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs font-medium" style={{ color: "var(--muted)" }}>Image URL <span style={{ color: "var(--subtle)" }}>(optional)</span></label>
+          <label className="text-xs font-medium" style={{ color: "var(--muted)" }}>
+            Image URL <span style={{ color: "var(--subtle)" }}>(optional)</span>
+          </label>
           <InnerField className="flex items-center gap-2 px-4 py-3">
             <Upload size={14} style={{ color: "var(--muted)" }} />
             <input
@@ -143,27 +173,36 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
           </InnerField>
         </div>
 
-        {/* Info box */}
-        <div
-          className="rounded-xl p-3 space-y-1"
-          style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}
-        >
+        {/* How it works */}
+        <div className="rounded-xl p-3 space-y-1" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
           <p className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>How it works</p>
           <ul className="text-xs space-y-0.5" style={{ color: "var(--muted)" }}>
             <li>• 1B total supply with bonding curve pricing</li>
             <li>• Graduates to full DEX at 800M tokens sold</li>
             <li>• 1% platform fee on all trades</li>
-            <li>• Powered by Rialo devnet (RLO gas)</li>
+            <li>• State stored onchain — Rialo devnet program</li>
           </ul>
         </div>
 
+        {/* Error */}
         {error && (
-          <div
-            className="rounded-xl p-3 text-xs"
-            style={{ background: "rgba(186,43,76,0.08)", color: "var(--danger)", border: "1px solid rgba(186,43,76,0.2)" }}
-          >
+          <div className="rounded-xl p-3 text-xs" style={{ background: "rgba(186,43,76,0.08)", color: "var(--danger)", border: "1px solid rgba(186,43,76,0.2)" }}>
             {error}
           </div>
+        )}
+
+        {/* Success tx link */}
+        {txHash && !txHash.startsWith("sim_") && (
+          <a
+            href={`${EXPLORER_BASE}/tx/${txHash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 text-xs rounded-xl px-3 py-2"
+            style={{ background: "rgba(26,128,71,0.08)", color: "var(--success)" }}
+          >
+            <ExternalLink size={12} />
+            View transaction on explorer
+          </a>
         )}
 
         <button
@@ -176,7 +215,7 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
           style={{ background: "var(--accent)", color: "white" }}
         >
           {loading ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
-          {loading ? "Launching…" : !wallet ? "Connect Wallet to Launch" : "Launch Token"}
+          {loading ? "Signing & launching…" : !wallet ? "Connect Wallet to Launch" : "Launch Token Onchain"}
         </button>
       </GlassCard>
     </div>

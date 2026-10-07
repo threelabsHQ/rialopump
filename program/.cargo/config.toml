@@ -1,0 +1,18 @@
+[build]
+# Use rialo toolchain (cargo +rialo sets this via RUSTUP_TOOLCHAIN)
+
+[target.x86_64-unknown-linux-gnu]
+# Use lld for host build scripts, with glibc crt from extracted libc6-dev
+linker = "/tmp/x86_64-linux-musl-cross/bin/x86_64-linux-musl-gcc"
+rustflags = [
+  "-C", "link-arg=-nostartfiles",
+  "-C", "link-arg=-B/tmp/syslibs",
+  "-C", "link-arg=-L/tmp/syslibs",
+  "-C", "link-arg=-L/lib/x86_64-linux-gnu",
+  "-C", "link-arg=-Wl,--dynamic-linker=/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+  "-C", "link-arg=/tmp/syslibs/Scrt1.o",
+  "-C", "link-arg=/tmp/syslibs/crti.o",
+  "-C", "link-arg=-lc",
+  "-C", "link-arg=-lgcc_s",
+  "-C", "link-arg=/tmp/syslibs/crtn.o",
+]

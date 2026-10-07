@@ -3,9 +3,11 @@ import { GlassCard, InnerField } from "./ui/GlassCard";
 import { api } from "../api";
 import type { Token, WalletState, QuoteResult } from "../types";
 import { formatRlo } from "../utils/crypto";
-import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { clsx } from "clsx";
+import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes } from "../rialo/chain";
+import { buildBuyIx, buildSellIx } from "../rialo/program";
 
 interface TradePanelProps {
   token: Token;
@@ -13,7 +15,9 @@ interface TradePanelProps {
   onTrade: () => void | Promise<void>;
 }
 
-type TxState = "idle" | "quoting" | "confirming" | "success" | "error";
+type TxState = "idle" | "quoting" | "signing" | "confirming" | "success" | "error";
+
+const EXPLORER_BASE = "https://rialo-explorer-devnet-direct.vercel.app";
 
 export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
   const [tab, setTab] = useState<"buy" | "sell">("buy");
@@ -25,53 +29,62 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const KELVIN = 1_000_000_000;
-  const quickAmounts = tab === "buy"
-    ? [0.1, 0.5, 1, 5]
-    : [1_000, 10_000, 100_000, 500_000];
+  const quickAmounts = tab === "buy" ? [0.1, 0.5, 1, 5] : [1_000, 10_000, 100_000, 500_000];
 
   const fetchQuote = useCallback(async (val: string) => {
     if (!val || parseFloat(val) <= 0) { setQuote(null); return; }
     setTxState("quoting");
     try {
       if (tab === "buy") {
-        const kelvin = Math.round(parseFloat(val) * KELVIN);
-        const q = await api.quoteBuy(token.id, kelvin);
+        const q = await api.quoteBuy(token.id, Math.round(parseFloat(val) * KELVIN));
         setQuote(q);
       } else {
-        const tokenAmt = parseFloat(val);
-        const q = await api.quoteSell(token.id, tokenAmt);
+        const q = await api.quoteSell(token.id, parseFloat(val));
         setQuote(q);
       }
-    } catch {}
+    } catch { /* ignore quote errors */ }
     setTxState("idle");
   }, [tab, token.id]);
 
   useEffect(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => { void fetchQuote(amount); }, 400);
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
+    return () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [amount, tab, fetchQuote]);
 
   const handleTrade = async () => {
     if (!wallet) { toast.error("Connect wallet first"); return; }
     if (!amount || parseFloat(amount) <= 0) { toast.error("Enter an amount"); return; }
 
-    setTxState("confirming");
+    setTxState("signing");
     setErrorMsg(null);
+
     try {
+      const tokenIdBytes = tokenIdToBytes(token.id);
+      const keypair = keypairFromHex(wallet.secretHex);
+
+      let signedTxBase64: string;
+
       if (tab === "buy") {
-        const kelvin = Math.round(parseFloat(amount) * KELVIN);
-        const result = await api.buy(token.id, wallet.pubkey, kelvin);
+        const kelvin = BigInt(Math.round(parseFloat(amount) * KELVIN));
+        const ix = buildBuyIx({ tokenId: tokenIdBytes, buyer: keypair.publicKey, rloAmount: kelvin });
+        signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+
+        setTxState("confirming");
+        const result = await api.buy(token.id, wallet.pubkey, Number(kelvin), signedTxBase64);
         toast.success(`Bought ${result.trade.tokenAmount.toLocaleString()} $${token.symbol}`);
         setTxHash(result.trade.txHash);
       } else {
-        const tokenAmt = parseFloat(amount);
-        const result = await api.sell(token.id, wallet.pubkey, tokenAmt);
-        toast.success(`Sold ${tokenAmt.toLocaleString()} $${token.symbol}`);
+        const tokenAmt = BigInt(Math.round(parseFloat(amount)));
+        const ix = buildSellIx({ tokenId: tokenIdBytes, seller: keypair.publicKey, tokenAmount: tokenAmt });
+        signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+
+        setTxState("confirming");
+        const result = await api.sell(token.id, wallet.pubkey, Number(tokenAmt), signedTxBase64);
+        toast.success(`Sold ${Number(tokenAmt).toLocaleString()} $${token.symbol}`);
         setTxHash(result.trade.txHash);
       }
+
       setTxState("success");
       setAmount("");
       setQuote(null);
@@ -82,36 +95,29 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
     }
   };
 
-  const isBusy = txState === "quoting" || txState === "confirming";
+  const isBusy = txState === "quoting" || txState === "signing" || txState === "confirming";
+  const isReal = txHash && !txHash.startsWith("sim_");
 
   return (
     <GlassCard className="p-4 space-y-4">
       {/* Tab row */}
       <div className="flex rounded-xl p-1" style={{ background: "rgba(18,45,69,0.06)" }}>
-        <button
-          onClick={() => { setTab("buy"); setAmount(""); setQuote(null); setTxState("idle"); }}
-          className={clsx(
-            "flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2",
-            tab === "buy" && "shadow-sm"
-          )}
-          style={tab === "buy"
-            ? { background: "var(--surface-strong)", color: "var(--success)" }
-            : { color: "var(--muted)" }}
-        >
-          <TrendingUp size={14} /> Buy
-        </button>
-        <button
-          onClick={() => { setTab("sell"); setAmount(""); setQuote(null); setTxState("idle"); }}
-          className={clsx(
-            "flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2",
-            tab === "sell" && "shadow-sm"
-          )}
-          style={tab === "sell"
-            ? { background: "var(--surface-strong)", color: "var(--danger)" }
-            : { color: "var(--muted)" }}
-        >
-          <TrendingDown size={14} /> Sell
-        </button>
+        {(["buy", "sell"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => { setTab(t); setAmount(""); setQuote(null); setTxState("idle"); }}
+            className={clsx(
+              "flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2",
+              tab === t && "shadow-sm"
+            )}
+            style={tab === t
+              ? { background: "var(--surface-strong)", color: t === "buy" ? "var(--success)" : "var(--danger)" }
+              : { color: "var(--muted)" }}
+          >
+            {t === "buy" ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+            {t === "buy" ? "Buy" : "Sell"}
+          </button>
+        ))}
       </div>
 
       {/* Quick amounts */}
@@ -121,12 +127,7 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
             key={q}
             onClick={() => setAmount(q.toString())}
             className="px-3 py-1 rounded-lg text-xs font-semibold transition-all active:scale-95"
-            style={{
-              background: "rgba(255,255,255,0.58)",
-              backdropFilter: "blur(12px)",
-              border: "1px solid rgba(255,255,255,0.66)",
-              color: "var(--ink-2)",
-            }}
+            style={{ background: "rgba(255,255,255,0.58)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.66)", color: "var(--ink-2)" }}
           >
             {tab === "buy" ? `${q} RLO` : `${q >= 1000 ? (q / 1000).toFixed(0) + "K" : q}`}
           </button>
@@ -150,16 +151,11 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
         </span>
       </InnerField>
 
-      {/* Quote preview */}
+      {/* Quote */}
       {quote && (
-        <div
-          className="rounded-xl p-3 space-y-1.5"
-          style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}
-        >
+        <div className="rounded-xl p-3 space-y-1.5" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
           <div className="flex justify-between text-xs">
-            <span style={{ color: "var(--muted)" }}>
-              {tab === "buy" ? "Tokens received" : "RLO received"}
-            </span>
+            <span style={{ color: "var(--muted)" }}>{tab === "buy" ? "Tokens received" : "RLO received"}</span>
             <span className="font-semibold tabular-nums" style={{ color: "var(--ink)" }}>
               {tab === "buy"
                 ? `~${(quote.tokensOut || 0).toLocaleString()} $${token.symbol}`
@@ -168,9 +164,7 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
           </div>
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>Platform fee (1%)</span>
-            <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>
-              {formatRlo(quote.fee)} RLO
-            </span>
+            <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>{formatRlo(quote.fee)} RLO</span>
           </div>
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>Price per token</span>
@@ -181,16 +175,32 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
         </div>
       )}
 
-      {/* Success / Error state */}
+      {/* Success */}
       {txState === "success" && txHash && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "rgba(26,128,71,0.08)" }}>
           <CheckCircle2 size={16} style={{ color: "var(--success)" }} />
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-semibold" style={{ color: "var(--success)" }}>Trade confirmed</p>
-            <p className="text-xs mono truncate" style={{ color: "var(--muted)" }}>{txHash}</p>
+            <p className="text-xs font-semibold" style={{ color: "var(--success)" }}>
+              {isReal ? "Confirmed onchain" : "Recorded (devnet sim)"}
+            </p>
+            {isReal ? (
+              <a
+                href={`${EXPLORER_BASE}/tx/${txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs mono truncate flex items-center gap-1 hover:opacity-70"
+                style={{ color: "var(--muted)" }}
+              >
+                {txHash.slice(0, 20)}… <ExternalLink size={10} />
+              </a>
+            ) : (
+              <p className="text-xs mono truncate" style={{ color: "var(--muted)" }}>{txHash}</p>
+            )}
           </div>
         </div>
       )}
+
+      {/* Error */}
       {txState === "error" && errorMsg && (
         <div className="flex items-start gap-2 px-3 py-2 rounded-xl" style={{ background: "rgba(186,43,76,0.08)" }}>
           <AlertCircle size={16} className="mt-0.5 shrink-0" style={{ color: "var(--danger)" }} />
@@ -207,26 +217,20 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
           (isBusy || !amount) && "opacity-50 cursor-not-allowed"
         )}
         style={{
-          background: txState === "success"
-            ? "var(--success)"
+          background: txState === "success" ? "var(--success)"
             : tab === "buy" ? "rgba(26,128,71,0.85)" : "rgba(186,43,76,0.85)",
           color: "white",
         }}
       >
-        {txState === "confirming" && <Loader2 size={16} className="animate-spin" />}
-        {txState === "confirming"
-          ? "Confirming…"
-          : txState === "success"
-          ? "Trade complete"
-          : tab === "buy"
-          ? `Buy $${token.symbol}`
-          : `Sell $${token.symbol}`}
+        {(txState === "signing" || txState === "confirming") && <Loader2 size={16} className="animate-spin" />}
+        {txState === "signing" ? "Signing…"
+          : txState === "confirming" ? "Confirming…"
+          : txState === "success" ? "Trade complete"
+          : tab === "buy" ? `Buy $${token.symbol}` : `Sell $${token.symbol}`}
       </button>
 
       {!wallet && (
-        <p className="text-center text-xs" style={{ color: "var(--muted)" }}>
-          Connect a wallet to trade
-        </p>
+        <p className="text-center text-xs" style={{ color: "var(--muted)" }}>Connect a wallet to trade</p>
       )}
     </GlassCard>
   );

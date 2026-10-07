@@ -41,6 +41,8 @@ export const api = {
     description: string;
     imageUrl: string;
     creator: string;
+    signedTxBase64?: string;
+    tokenIdHex?: string;
   }) => req<{ success: boolean; token: Token }>("/tokens", { method: "POST", body: JSON.stringify(body) }),
 
   quoteBuy: (id: string, rloAmount: number) =>
