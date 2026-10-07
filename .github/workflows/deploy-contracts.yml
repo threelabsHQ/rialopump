@@ -35,7 +35,6 @@ jobs:
   build-and-deploy:
     name: Build PolkaVM + Deploy to Rialo
     runs-on: ubuntu-22.04
-    environment: devnet
     permissions:
       contents: write  # to commit updated AGENTS.md
 
