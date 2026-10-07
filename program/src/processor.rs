@@ -317,7 +317,7 @@ fn process_withdraw_fees(
     signer_seeds.push(vec![bump]);
     let signer_seeds_ref: Vec<&[u8]> = signer_seeds.iter().map(|s| s.as_slice()).collect();
 
-    let vault_balance = fee_vault_info.lamports();
+    let vault_balance = **fee_vault_info.lamports.borrow();
     if vault_balance == 0 {
         return Ok(());
     }
