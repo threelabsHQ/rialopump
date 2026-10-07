@@ -102,7 +102,7 @@ fn process_create_token(
 
     // Allocate account
     let state = TokenState::new(*creator_info.key, name, symbol, description);
-    let data = state.try_to_vec()?;
+    let data = borsh::to_vec(&state).map_err(|_| ProgramError::InvalidAccountData)?;
     let space = data.len() + 64; // small headroom for future fields
     let rent = Rent::get()?;
     let lamports = rent.minimum_balance(space);
@@ -198,7 +198,7 @@ fn process_buy(
         msg!("Token graduated!");
     }
 
-    let new_data = state.try_to_vec()?;
+    let new_data = borsh::to_vec(&state).map_err(|_| ProgramError::InvalidAccountData)?;
     let mut acct_data = token_state_info.try_borrow_mut_data()?;
     acct_data[..new_data.len()].copy_from_slice(&new_data);
 
@@ -274,7 +274,7 @@ fn process_sell(
     state.token_supply = state.token_supply.saturating_sub(token_amount);
     state.fees_collected += fee;
 
-    let new_data = state.try_to_vec()?;
+    let new_data = borsh::to_vec(&state).map_err(|_| ProgramError::InvalidAccountData)?;
     let mut acct_data = token_state_info.try_borrow_mut_data()?;
     acct_data[..new_data.len()].copy_from_slice(&new_data);
 
@@ -317,7 +317,7 @@ fn process_withdraw_fees(
     signer_seeds.push(vec![bump]);
     let signer_seeds_ref: Vec<&[u8]> = signer_seeds.iter().map(|s| s.as_slice()).collect();
 
-    let vault_balance = **fee_vault_info.lamports.borrow();
+    let vault_balance = fee_vault_info.lamports();
     if vault_balance == 0 {
         return Ok(());
     }

@@ -17,7 +17,7 @@ no-entrypoint = []
 [dependencies]
 # Rialo program SDK — mirrors Solana SDK, targets RISC-V/PolkaVM.
 # Pinned to 0.12.2 matching the rialoman stable@0.12.2 toolchain release.
-rialo-s-program = { version = "0.12.2", default-features = false }
+rialo-s-program = { version = "0.12.2", features = ["borsh"] }
 rialo-s-program-error = { version = "0.12.2", features = ["borsh"] }
 borsh = { version = "1", features = ["derive"] }
 
