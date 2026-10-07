@@ -146,14 +146,18 @@ jobs:
           umask 077
           python3 scripts/configure-keypair.py
 
-          # Airdrop (devnet only) — rialo client reads keypair from default config path
+          # Airdrop (devnet only) — max 1 RLO per call, request 3x to accumulate
           NET="${{ inputs.network || 'devnet' }}"
           if [ "${NET}" != "mainnet" ]; then
-            echo "Requesting airdrop on ${NET}..."
+            echo "Requesting airdrop on ${NET} (3 × 1 RLO)..."
             for i in 1 2 3; do
-              rialo client airdrop -n "${NET}" --amount 2 2>&1 && break || \
-              { echo "Airdrop attempt $i failed, retrying..."; sleep 5; }
-            done || true
+              rialo client airdrop -n "${NET}" --amount 1 2>&1 \
+                && echo "Airdrop $i/3 succeeded" \
+                || echo "Airdrop $i/3 failed (non-fatal)"
+              sleep 3
+            done
+            echo "Balance after airdrop:"
+            rialo client balance -n "${NET}" 2>&1 || true
             sleep 5
           fi
 
