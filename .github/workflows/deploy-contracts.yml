@@ -161,22 +161,32 @@ jobs:
             sleep 5
           fi
 
-          # Deploy
+          # Deploy — capture full output, always print it
           BIN="${POLKAVM_PATH}"
           echo "Deploying: ${BIN}"
           echo "Network:   ${NET}"
 
+          set +e
           rialo client program deploy -n "${NET}" "${BIN}" 2>&1 | tee /tmp/deploy.log
-          if grep -qi "error:" /tmp/deploy.log && ! grep -qi "program id" /tmp/deploy.log; then
-            echo "::error::Deploy failed:"
-            cat /tmp/deploy.log
+          DEPLOY_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          echo "--- deploy output ---"
+          cat /tmp/deploy.log
+          echo "--- end deploy output (exit: ${DEPLOY_EXIT}) ---"
+
+          if [ "${DEPLOY_EXIT}" -ne 0 ]; then
+            echo "::error::rialo client program deploy exited ${DEPLOY_EXIT}"
             exit 1
           fi
 
+          # Extract program ID — only accept a real base58 address printed by the CLI
           PROGRAM_ID=$(grep -oiE 'program id[: ]+[A-Za-z0-9]{32,}' /tmp/deploy.log \
-                       | grep -oE '[A-Za-z0-9]{32,}$' | head -1 \
-                       || grep -oE '[A-Za-z0-9]{32,44}' /tmp/deploy.log | tail -1 \
-                       || echo "unknown")
+                       | grep -oE '[A-Za-z0-9]{32,}$' | head -1 || true)
+          if [ -z "${PROGRAM_ID}" ]; then
+            echo "::warning::Could not parse program ID from deploy output — check the log above"
+            PROGRAM_ID="unknown"
+          fi
           echo "PROGRAM_ID=${PROGRAM_ID}" >> "$GITHUB_ENV"
           echo "Deployed program ID: ${PROGRAM_ID}"
 
