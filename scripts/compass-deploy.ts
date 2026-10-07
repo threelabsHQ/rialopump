@@ -63,9 +63,12 @@ const ACTIVE_CHAIN: ChainConfig = {
   gasToken: 'native',
 };
 
-function resolveChainDef(compassChain: string): ReturnType<typeof getChain> {
+type CompassChainDef = { explorerUrl?: string; name: string; nativeCurrency: { symbol: string } };
+
+function resolveChainDef(compassChain: string): CompassChainDef {
+  const fn = getChain as (chain: string) => CompassChainDef;
   try {
-    return getChain(compassChain);
+    return fn(compassChain);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Unknown --compass-chain "${compassChain}". Expected a Compass chain id (e.g. Arc_Testnet, Base_Sepolia). Detail: ${msg}`);
@@ -359,11 +362,7 @@ export function parseArgs(argv: string[]): CliOptions {
 
   const resolvedRpcUrl = resolveRpcUrl(rpcUrl, compassChain);
 
-  const chainDefRaw = resolveChainDef(compassChain) as {
-    explorerUrl?: string;
-    name: string;
-    nativeCurrency: { symbol: string };
-  };
+  const chainDefRaw = resolveChainDef(compassChain);
   ACTIVE_CHAIN.circleBlockchain = blockchain;
   ACTIVE_CHAIN.compassChain = compassChain;
   ACTIVE_CHAIN.explorer = explorerOverride ?? chainDefRaw.explorerUrl ?? '';
