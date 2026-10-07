@@ -130,12 +130,14 @@ async function syncOnchainState(t: TokenRecord): Promise<void> {
   if (!t.onchain) return;
   try {
     const tokenIdBytes = tokenIdToBytes(t.tokenIdHex);
-    const { pda } = deriveTokenStatePda(tokenIdBytes, new PublicKey(PROGRAM_ID_STR));
+    const { pda } = deriveTokenStatePda(tokenIdBytes, PublicKey.fromString(PROGRAM_ID_STR));
     const info = await client.getAccountInfo(pda);
     if (!info?.data) return;
+    // RPC returns data as [base64String, "base64"] tuple
+    const raw = Array.isArray(info.data) ? (info.data as [string, string])[0] : info.data as string;
     const data = info.data instanceof Uint8Array
       ? info.data
-      : new Uint8Array(Buffer.from(info.data as string, "base64"));
+      : new Uint8Array(Buffer.from(raw, "base64"));
     const state = deserializeTokenState(data);
     t.tokenSupply = Number(state.tokenSupply);
     t.graduated = state.graduated;
@@ -180,10 +182,10 @@ app.post("/airdrop", async (req, res) => {
   try {
     const { pubkey, amount } = req.body as { pubkey?: string; amount?: number };
     if (!pubkey) return res.status(400).json({ error: "pubkey required" });
-    const pk = new PublicKey(pubkey);
+    const pk = PublicKey.fromString(pubkey);
     const kelvin = BigInt(Math.round((amount || 1) * KELVIN_PER_RLO));
-    const sig = await client.requestAirdropAndConfirm(pk, kelvin);
-    res.json({ success: true, signature: sig.signature ?? sig.toString() });
+    const confirmed = await client.requestAirdropAndConfirm(pk, kelvin);
+    res.json({ success: true, signature: confirmed.signature });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
@@ -191,7 +193,7 @@ app.post("/airdrop", async (req, res) => {
 
 app.get("/balance/:pubkey", async (req, res) => {
   try {
-    const pk = new PublicKey(req.params.pubkey);
+    const pk = PublicKey.fromString(req.params.pubkey);
     const bal = await client.getBalance(pk);
     res.json({ kelvin: bal.toString(), rlo: (Number(bal) / KELVIN_PER_RLO).toFixed(6) });
   } catch (e: unknown) {
@@ -267,7 +269,7 @@ app.post("/tokens", async (req, res) => {
     if (name.length > 32) return res.status(400).json({ error: "name max 32 chars" });
 
     let pk: PublicKey;
-    try { pk = new PublicKey(creator); } catch {
+    try { pk = PublicKey.fromString(creator); } catch {
       return res.status(400).json({ error: "Invalid creator pubkey" });
     }
 
@@ -286,8 +288,8 @@ app.post("/tokens", async (req, res) => {
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
-        const sig = await client.sendAndConfirmTransaction(txBytes);
-        txHash = sig.signature ?? sig.toString();
+        const confirmed = await client.sendAndConfirmTransaction(txBytes);
+        txHash = confirmed.signature;
         onchain = true;
         console.log("[create] onchain tx:", txHash);
       } catch (e: unknown) {
@@ -368,15 +370,15 @@ app.post("/tokens/:id/buy", async (req, res) => {
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
-        const sig = await client.sendAndConfirmTransaction(txBytes);
-        txHash = sig.signature ?? sig.toString();
+        const confirmed = await client.sendAndConfirmTransaction(txBytes);
+        txHash = confirmed.signature;
         onchain = true;
       } catch (e: unknown) {
         return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
       }
     } else {
       // No signed tx: verify balance at minimum
-      const pk = new PublicKey(trader);
+      const pk = PublicKey.fromString(trader);
       const balance = await client.getBalance(pk);
       if (Number(balance) < rloAmount) {
         return res.status(400).json({ error: "Insufficient RLO balance" });
@@ -447,8 +449,8 @@ app.post("/tokens/:id/sell", async (req, res) => {
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
-        const sig = await client.sendAndConfirmTransaction(txBytes);
-        txHash = sig.signature ?? sig.toString();
+        const confirmed = await client.sendAndConfirmTransaction(txBytes);
+        txHash = confirmed.signature;
         onchain = true;
       } catch (e: unknown) {
         return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });

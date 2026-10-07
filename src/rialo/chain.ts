@@ -52,10 +52,16 @@ export async function fetchTokenState(tokenId: Uint8Array): Promise<TokenState |
   try {
     const info = await client.getAccountInfo(pda);
     if (!info?.data) return null;
-    const data =
-      info.data instanceof Uint8Array
-        ? info.data
-        : new Uint8Array(Buffer.from(info.data as unknown as string, "base64"));
+    // RPC returns data as [base64String, "base64"] tuple
+    let data: Uint8Array;
+    if (info.data instanceof Uint8Array) {
+      data = info.data;
+    } else {
+      const raw = Array.isArray(info.data)
+        ? (info.data as [string, string])[0]
+        : (info.data as string);
+      data = new Uint8Array(Buffer.from(raw, "base64"));
+    }
     return deserializeTokenState(data);
   } catch {
     return null;
@@ -69,14 +75,11 @@ export async function signAndSend(
   signer: Keypair
 ): Promise<string> {
   const client = getRialoClient();
-  const [validFrom, configHashPrefix] = await Promise.all([
-    client.getConfigHashPrefix(),
-    client.getConfigHashPrefix(),
-  ]);
-  const tx = buildTx(instructions, signer.publicKey, validFrom, configHashPrefix);
+  const configHashPrefix = await client.getConfigHashPrefix();
+  const tx = buildTx(instructions, signer.publicKey, configHashPrefix, configHashPrefix);
   tx.sign(signer);
-  const sig = await client.sendAndConfirmTransaction(tx.serialize());
-  return sig.signature ?? (sig as unknown as { toString(): string }).toString();
+  const confirmed = await client.sendAndConfirmTransaction(tx.serialize());
+  return confirmed.signature;
 }
 
 // ─── Build signed tx bytes (base64) for server submission ────────────────────
@@ -98,8 +101,8 @@ export async function requestAirdrop(pubkey: string, rloAmount: number): Promise
   const client = getRialoClient();
   const pk = PublicKey.fromString(pubkey);
   const kelvin = BigInt(Math.round(rloAmount * 1_000_000_000));
-  const sig = await client.requestAirdropAndConfirm(pk, kelvin);
-  return sig.signature ?? (sig as unknown as { toString(): string }).toString();
+  const confirmed = await client.requestAirdropAndConfirm(pk, kelvin);
+  return confirmed.signature;
 }
 
 // ─── Token ID encoding ────────────────────────────────────────────────────────

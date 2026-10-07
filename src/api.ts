@@ -23,7 +23,17 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
-  const json = (await res.json()) as Record<string, unknown>;
+  const text = await res.text();
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      res.ok
+        ? `Server returned non-JSON (${res.status})`
+        : `HTTP ${res.status}: ${text.slice(0, 120)}`
+    );
+  }
   if (!res.ok) throw new Error(typeof json.error === "string" ? json.error : `HTTP ${res.status}`);
   return json as unknown as T;
 }

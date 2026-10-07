@@ -111,7 +111,7 @@ export function deserializeTokenState(data: Uint8Array): ServerTokenState {
   const r = new BorshReader(data);
   const version = r.readU8();
   const creatorBytes = r.readFixedBytes(32);
-  const creator = new PublicKey(creatorBytes).toBase58();
+  const creator = PublicKey.fromBytes(creatorBytes).toString();
   const virtualRlo = r.readU64LE();
   const virtualTokens = r.readU64LE();
   const tokenSupply = r.readU64LE();
@@ -129,7 +129,7 @@ export function deriveTokenStatePda(
   tokenId: Uint8Array,
   programId: PublicKey
 ): { pda: PublicKey; bump: number } {
-  const [pda, bump] = PublicKey.findProgramAddressSync(
+  const [pda, bump] = PublicKey.findProgramAddress(
     [Buffer.from("token"), tokenId],
     programId
   );
@@ -140,7 +140,7 @@ export function deriveFeeVaultPda(
   tokenId: Uint8Array,
   programId: PublicKey
 ): { pda: PublicKey; bump: number } {
-  const [pda, bump] = PublicKey.findProgramAddressSync(
+  const [pda, bump] = PublicKey.findProgramAddress(
     [Buffer.from("fees"), tokenId],
     programId
   );
