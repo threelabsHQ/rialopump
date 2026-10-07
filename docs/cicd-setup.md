@@ -1,103 +1,87 @@
-# CI/CD Setup Guide — hugefun on Rialo Devnet
+# CI/CD Setup Guide
 
-hugefun uses **Rialo**, a custom blockchain (by Subzero Labs) whose programs are
-compiled as **Solana-compatible eBPF shared libraries** (`.so`) and deployed with
-the Rialo CDK's `ProgramDeployment`. This is **not EVM** — there are no Solidity
-contracts, no Foundry, no `forge` commands.
+## Overview
 
----
+Three GitHub Actions workflows:
 
-## Program architecture
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `ci.yml` | Every push/PR | TS lint + typecheck, Rust check + test, PolkaVM build |
+| `deploy-contracts.yml` | Push to main touching `program/**` | Build + deploy .polkavm to Rialo devnet |
+| `deploy-app.yml` | Push to main (non-contract paths) | Frontend Vite build |
 
-| File | Purpose |
+## Pinned Versions
+
+| Component | Version |
 |---|---|
-| `program/Cargo.toml` | Rust crate definition — compiles to eBPF `.so` |
-| `program/src/lib.rs` | On-chain bonding-curve program (CreateToken / Buy / Sell) |
-| `scripts/deploy-program.ts` | TypeScript deploy script using `@rialo/ts-cdk ProgramDeployment` |
+| rialoman | 0.3.0 |
+| Rialo Release | stable@0.12.2 |
+| Rialo Rust Toolchain | 0.0.3 |
+| Build tool | rialo-build |
+| Deploy tool | rialo program deploy |
 
----
+## Required GitHub Secret
 
-## Workflows
+### `RIALO_DEPLOY_KEY` (Settings → Secrets → Actions)
 
-| File | Trigger | What it does |
-|---|---|---|
-| `ci.yml` | Every push / PR | TS lint + typecheck; `cargo check`; `cargo test`; `cargo build-sbf` |
-| `deploy-contracts.yml` | Push to `main` (program changed) or manual | Builds `.so`, runs tests, deploys to Rialo devnet via `ProgramDeployment`, updates `AGENTS.md` |
-| `deploy-app.yml` | Push to `main` (non-program changes) or manual | Vite build; deploy stubs for Fly.io / Railway / Render |
+A JSON array of **64 integers** (Ed25519 keypair in Solana/Rialo format).
 
----
-
-## Required GitHub Secrets
-
-**Settings → Secrets and variables → Actions:**
-
-| Secret | Description | How to get it |
-|---|---|---|
-| `DEPLOYER_SECRET_HEX` | 64-char hex Ed25519 private key for the deployer wallet | Generate via `/wallet/generate` endpoint or any Ed25519 keygen |
-| `PROGRAM_KEYPAIR_HEX` | 64-char hex Ed25519 key that becomes the stable program ID | **Generated on first deploy** — the deploy script prints it; save it immediately |
-
-## GitHub Variables (non-secret)
-
-| Variable | Default | Description |
-|---|---|---|
-| `RIALO_DEVNET_RPC` | `https://devnet.rialo.io:4101` | Rialo devnet JSON-RPC URL |
-
----
-
-## Building locally
-
+Generate one with:
 ```bash
-# Install Rust + Solana CLI (provides cargo-build-sbf)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+node -e "
+const c = require('crypto');
+const seed = c.randomBytes(32);
+// The second 32 bytes are a placeholder public key — rialo CLI computes the real one
+const kp = [...seed, ...c.randomBytes(32)];
+console.log(JSON.stringify(kp));
+"
+```
 
-# Build the eBPF binary
+Or with Python (same as the workflow uses):
+```python
+import os, json, hashlib
+# ... (see the Configure Signing Keypair step in deploy-contracts.yml)
+```
+
+**Save this value permanently.** The same secret key produces the same program ID — if you lose it you can't upgrade the deployed program.
+
+## Optional GitHub Variable
+
+### `RIALO_NETWORK` (Settings → Variables → Actions)
+
+- `devnet` (default) — public Rialo devnet, has faucet airdrop
+- `testnet` — Rialo testnet (requires pre-funded wallet)
+
+## How the Deploy Works
+
+1. `rialo-build --program-path program --output-dir program/artifacts` compiles the Rust source to a `.polkavm` binary
+2. The deployer keypair is written to `~/.config/rialo/id.json`
+3. `rialo airdrop 2` funds the deployer wallet (devnet only)
+4. `rialo program deploy <bin> --keypair <key> --url <network>` uploads the binary in chunks
+5. The program ID is extracted from the output and written to `AGENTS.md`
+6. `AGENTS.md` is committed back to the repo via `EndBug/add-and-commit@v9`
+
+## Triggering a Manual Deploy
+
+Go to **Actions → Build & Deploy Rialo Program → Run workflow**:
+- `network`: devnet or testnet
+- `deploy_contract`: true (default) to deploy after build
+
+## Local Development
+
+The Rust program can be checked locally with standard Rust (no rialo toolchain needed):
+```bash
 cd program
-cargo build-sbf --manifest-path Cargo.toml
-# Output: program/target/deploy/hugefun_program.so
-
-# Run native unit tests
-cargo test
+cargo check --features no-entrypoint
+cargo test --features no-entrypoint --lib
 ```
 
----
-
-## Deploying locally
-
+Full `.polkavm` build requires `rialoman` + the rialo toolchain (Ubuntu only, no macOS/Windows support yet):
 ```bash
-# Set env vars
-export DEPLOYER_SECRET_HEX=<your 64-char hex key>
-export PROGRAM_KEYPAIR_HEX=<your 64-char hex program keypair>  # omit on first deploy
-export RIALO_DEVNET_RPC=https://devnet.rialo.io:4101
+# Install rialoman
+curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh | bash
+rialoman install stable@0.12.2 --default
 
-bun run scripts/deploy-program.ts
+# Build
+rialo-build --program-path program --output-dir program/artifacts
 ```
-
-On **first deploy**, omit `PROGRAM_KEYPAIR_HEX` — the script generates a fresh one and
-prints it. Save that value as `PROGRAM_KEYPAIR_HEX` for all future upgrades, otherwise
-a new program ID is created each time.
-
----
-
-## Generating a deployer wallet
-
-```bash
-# Via the hugefun API server (must be running)
-curl -X POST http://localhost:3001/wallet/generate
-# Returns: { secretHex: "...", note: "..." }
-
-# Fund it on devnet
-curl -X POST http://localhost:3001/airdrop \
-  -H "Content-Type: application/json" \
-  -d '{"pubkey": "<your pubkey>", "amount": 100}'
-```
-
----
-
-## Environment variables for the deployed server
-
-| Variable | Required | Description |
-|---|---|---|
-| `RIALO_DEVNET_RPC` | No | RPC URL (defaults to `https://devnet.rialo.io:4101`) |
-| `RIALO_DEPLOYER_SECRET_HEX` | No | Server deployer keypair (enables real TX broadcast) |
-| `PORT` | No | HTTP port (defaults to `3001`) |

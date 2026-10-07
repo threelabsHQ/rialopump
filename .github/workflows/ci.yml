@@ -10,6 +10,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RIALO_RELEASE_VERSION: "stable@0.12.2"
+  RIALO_TOOLCHAIN_VERSION: "0.0.3"
+
 jobs:
   # ── 1. TypeScript: lint + typecheck ─────────────────────────────────────────
   ts-check:
@@ -31,8 +35,7 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # ── 2. Rialo program: cargo check + tests (host target, no rialo toolchain) ─
-  #    Catches type errors and logic bugs without needing the full Rialo toolchain.
+  # ── 2. Rust: cargo check + tests on host (fast, no rialo toolchain needed) ──
   program-check:
     name: Rust program check & test
     runs-on: ubuntu-latest
@@ -42,68 +45,110 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo registry
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            program/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('program/Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            program/target/
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('program/Cargo.lock', 'program/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-check-
 
-      - name: cargo check (native)
+      - name: cargo check (host, no-entrypoint)
         working-directory: program
-        # Use no-entrypoint so the PolkaVM-only entrypoint macro doesn't trigger
         run: cargo check --features no-entrypoint
 
-      - name: cargo test (native)
+      - name: cargo test (host, no-entrypoint)
         working-directory: program
         run: cargo test --features no-entrypoint --lib
 
-  # ── 3. Rialo program: full PolkaVM build via cargo +rialo ────────────────────
-  #    Installs rialoman + the rialo Rust toolchain, then compiles to .polkavm.
+  # ── 3. Full PolkaVM build via rialo-build ────────────────────────────────────
   program-build-polkavm:
     name: Build PolkaVM binary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev curl git \
+            clang llvm binaryen ca-certificates cmake ninja-build \
+            protobuf-compiler python3 xz-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip1
+
       - name: Install rialoman
         run: |
-          curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh | bash
+          set -euo pipefail
+          curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh \
+            | bash -s -- --no-modify-path --default-toolchain none
           echo "$HOME/.local/share/rialo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          rialoman --version
 
-      - name: Install Rialo stable release + Rust toolchain
+      - name: Install Rialo release + rialo-rust toolchain
         run: |
-          rialoman install stable@latest
-          rialoman use stable@latest
+          set -euo pipefail
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          rialoman install "${RIALO_RELEASE_VERSION}" --default
+          rialoman use "${RIALO_RELEASE_VERSION}" || true
+          rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" || \
+            echo "::notice::Prebuilt toolchain unavailable — rialo-build may use its own"
+          rialoman list || true
 
-      - name: Cache Cargo registry
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            program/target
-          key: rialo-polkavm-${{ runner.os }}-${{ hashFiles('program/Cargo.lock') }}
-          restore-keys: rialo-polkavm-${{ runner.os }}-
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            program/target/
+          key: ${{ runner.os }}-cargo-rialo-${{ hashFiles('program/Cargo.lock', 'program/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-rialo-
 
-      - name: Build .polkavm binary
+      - name: Patch zerocopy
         working-directory: program
-        run: cargo +rialo build --release
-
-      - name: Verify .polkavm artifact exists
         run: |
-          find program/target -name "*.polkavm" | tee /tmp/polkavm-artifacts.txt
-          if [ ! -s /tmp/polkavm-artifacts.txt ]; then
-            echo "ERROR: no .polkavm file found after build" && exit 1
+          cargo update -p zerocopy --precise 0.7.35 2>/dev/null \
+            || cargo update -p zerocopy \
+            || true
+
+      - name: Build .polkavm via rialo-build
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          mkdir -p program/artifacts
+          if ! rialo-build \
+            --program-path program \
+            --output-dir program/artifacts; then
+            echo "::error::rialo-build failed:"
+            cargo +rialo build --manifest-path program/Cargo.toml --release --verbose || true
+            exit 1
           fi
+          ls -la program/artifacts/
+
+      - name: Verify .polkavm artifact
+        run: |
+          COUNT=$(find program/artifacts -name "*.polkavm" | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No .polkavm file produced" && exit 1
+          fi
+          find program/artifacts -name "*.polkavm" -exec sha256sum {} \;
 
       - name: Upload .polkavm artifact
         uses: actions/upload-artifact@v4
         with:
           name: hugefun-program-polkavm
-          path: program/target/**/*.polkavm
+          path: program/artifacts/
           if-no-files-found: error
           retention-days: 7

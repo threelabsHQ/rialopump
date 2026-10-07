@@ -2,71 +2,29 @@
  * deploy-program.ts
  *
  * Deploys the hugefun PolkaVM program binary to Rialo devnet using
- * ProgramDeployment from @rialo/ts-cdk.
+ * the `rialo program deploy` CLI (same tool the rexo reference uses).
  *
- * Required env vars:
- *   DEPLOYER_SECRET_HEX   — 64-char hex Ed25519 seed (the deployer/payer wallet)
- *   PROGRAM_KEYPAIR_HEX   — 64-char hex Ed25519 seed for the program account
- *                           (generate once: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
- *                           Save this! Same key = same program ID = upgradeable.
- *   POLKAVM_PATH          — path to the compiled .polkavm binary
- *                           (defaults to program/target/hugefun-program-riscv/hugefun_program.polkavm)
+ * Required env vars (set as GitHub Actions secrets):
+ *   RIALO_DEPLOY_KEY   — JSON array of 64 integers (Ed25519 keypair)
+ *                        Generate: node -e "const c=require('crypto');const s=c.randomBytes(32);console.log(JSON.stringify([...s,...c.randomBytes(32)]))"
+ *                        (or use the same Python keypair generator in the workflow)
  *
  * Optional:
- *   RIALO_DEVNET_RPC      — RPC URL (default: https://devnet.rialo.io:4101)
+ *   RIALO_NETWORK      — "devnet" | "testnet" (default: devnet)
+ *   POLKAVM_PATH       — path to .polkavm binary (default: program/artifacts/*.polkavm)
+ *
+ * This script is a thin orchestrator; the actual deploy is handled by
+ * the `rialo program deploy` CLI that rialoman installs.
  */
 
 import fs from "fs";
 import path from "path";
-import {
-  createRialoClient,
-  RIALO_DEVNET_CHAIN,
-  Keypair,
-  ProgramDeployment,
-} from "@rialo/ts-cdk";
+import { spawnSync } from "child_process";
+import os from "os";
 
-// ── Config ─────────────────────────────────────────────────────────────────
+const NETWORK = process.env.RIALO_NETWORK ?? "devnet";
 
-const RPC_URL =
-  process.env.RIALO_DEVNET_RPC ?? "https://devnet.rialo.io:4101";
-
-const DEPLOYER_HEX = process.env.DEPLOYER_SECRET_HEX;
-if (!DEPLOYER_HEX || DEPLOYER_HEX.length !== 64) {
-  console.error(
-    "ERROR: DEPLOYER_SECRET_HEX must be set to a 64-char hex string (32-byte Ed25519 seed)"
-  );
-  process.exit(1);
-}
-
-const PROGRAM_KEYPAIR_HEX = process.env.PROGRAM_KEYPAIR_HEX;
-if (!PROGRAM_KEYPAIR_HEX || PROGRAM_KEYPAIR_HEX.length !== 64) {
-  console.error(
-    "ERROR: PROGRAM_KEYPAIR_HEX must be set to a 64-char hex string.\n" +
-      "Generate one (do this once and save it):\n" +
-      "  node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
-  );
-  process.exit(1);
-}
-
-// Locate .polkavm binary
-const DEFAULT_POLKAVM = path.resolve(
-  "program/target/hugefun-program-riscv/hugefun_program.polkavm"
-);
-const polkavmPath = process.env.POLKAVM_PATH ?? DEFAULT_POLKAVM;
-
-if (!fs.existsSync(polkavmPath)) {
-  // Try any .polkavm under program/target
-  const found = findPolkavm("program/target");
-  if (!found) {
-    console.error(
-      `ERROR: .polkavm binary not found at ${polkavmPath}\n` +
-        "Build first: cd program && cargo +rialo build --release"
-    );
-    process.exit(1);
-  }
-  console.log(`Using .polkavm found at: ${found}`);
-  process.env.POLKAVM_PATH = found;
-}
+// ── Locate .polkavm binary ──────────────────────────────────────────────────
 
 function findPolkavm(dir: string): string | null {
   if (!fs.existsSync(dir)) return null;
@@ -82,65 +40,104 @@ function findPolkavm(dir: string): string | null {
   return null;
 }
 
-const resolvedPolkavmPath =
-  process.env.POLKAVM_PATH ?? DEFAULT_POLKAVM;
+const defaultArtifacts = "program/artifacts";
+let polkavmPath = process.env.POLKAVM_PATH;
 
-// ── Keypairs ───────────────────────────────────────────────────────────────
-
-function keypairFromHex(hex: string): Keypair {
-  const bytes = Buffer.from(hex, "hex");
-  return Keypair.fromSecretKey(new Uint8Array(bytes));
-}
-
-const deployerKeypair = keypairFromHex(DEPLOYER_HEX);
-const programKeypair = keypairFromHex(PROGRAM_KEYPAIR_HEX);
-
-// ── Main ───────────────────────────────────────────────────────────────────
-
-async function main() {
-  console.log("=== hugefun program deploy ===");
-  console.log("RPC:", RPC_URL);
-  console.log("Deployer:", deployerKeypair.publicKey.toString());
-  console.log("Program ID:", programKeypair.publicKey.toString());
-  console.log("Binary:", resolvedPolkavmPath);
-
-  const programData = new Uint8Array(fs.readFileSync(resolvedPolkavmPath));
-  console.log(`Binary size: ${(programData.length / 1024).toFixed(1)} KB`);
-
-  const client = createRialoClient({
-    chain: {
-      ...RIALO_DEVNET_CHAIN,
-      rpcUrl: RPC_URL,
-    },
-  });
-
-  // Check deployer balance
-  const balance = await client.getBalance(deployerKeypair.publicKey);
-  const balanceRlo = Number(balance) / 1_000_000_000;
-  console.log(`Deployer balance: ${balanceRlo.toFixed(4)} RLO`);
-  if (Number(balance) < 1_000_000_000) {
+if (!polkavmPath) {
+  const found = findPolkavm(defaultArtifacts);
+  if (!found) {
     console.error(
-      "ERROR: Deployer needs at least 1 RLO. Use the /airdrop endpoint to fund it."
+      `ERROR: No .polkavm binary found under ${defaultArtifacts}\n` +
+        "Build first: run the CI workflow or rialo-build --program-path program --output-dir program/artifacts"
     );
     process.exit(1);
   }
+  polkavmPath = found;
+}
 
-  console.log("\nDeploying (this uploads in chunks — may take 1–2 min)…");
+if (!fs.existsSync(polkavmPath)) {
+  console.error(`ERROR: .polkavm not found at ${polkavmPath}`);
+  process.exit(1);
+}
 
-  const deployment = new ProgramDeployment({
-    programData,
-    programKeypair,
-    config: {
-      chunkSize: 900,
-      maxRetries: 5,
-    },
+// ── Set up deployer keypair ─────────────────────────────────────────────────
+
+const deployKeyEnv = process.env.RIALO_DEPLOY_KEY;
+
+const keypairDir = path.join(os.homedir(), ".config", "rialo");
+const keypairPath = path.join(keypairDir, "id.json");
+
+if (deployKeyEnv) {
+  // Validate and write the JSON 64-int array keypair
+  let raw: unknown;
+  try {
+    raw = JSON.parse(deployKeyEnv);
+  } catch {
+    console.error("ERROR: RIALO_DEPLOY_KEY must be a valid JSON array of 64 integers");
+    process.exit(1);
+  }
+  if (!Array.isArray(raw) || raw.length !== 64 || !raw.every((x) => typeof x === "number" && x >= 0 && x <= 255)) {
+    console.error("ERROR: RIALO_DEPLOY_KEY must be a JSON array of exactly 64 integers (0..255)");
+    process.exit(1);
+  }
+  fs.mkdirSync(keypairDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(keypairPath, JSON.stringify(raw), { mode: 0o600 });
+  console.log(`Deployer keypair written to ${keypairPath}`);
+} else if (!fs.existsSync(keypairPath)) {
+  console.error(
+    "ERROR: No deployer keypair found.\n" +
+      "Set RIALO_DEPLOY_KEY to a JSON array of 64 integers, or place id.json at ~/.config/rialo/id.json\n" +
+      "Generate a keypair:\n" +
+      '  node -e "const c=require(\'crypto\');const s=c.randomBytes(32);console.log(JSON.stringify([...s,...c.randomBytes(32)]))"'
+  );
+  process.exit(1);
+} else {
+  console.log(`Using existing keypair at ${keypairPath}`);
+}
+
+// ── Run deploy ──────────────────────────────────────────────────────────────
+
+console.log("=== hugefun program deploy ===");
+console.log("Network:", NETWORK);
+console.log("Binary:", polkavmPath, `(${(fs.statSync(polkavmPath).size / 1024).toFixed(1)} KB)`);
+
+const deployCommands = [
+  ["rialo", "program", "deploy", polkavmPath, "--keypair", keypairPath, "--url", NETWORK],
+  ["rialo", "program", "deploy", polkavmPath, "-k", keypairPath, "-u", NETWORK],
+  ["rialo", "client", "program", "deploy", "-n", NETWORK, polkavmPath],
+];
+
+let deployed = false;
+let outputLog = "";
+
+for (const args of deployCommands) {
+  console.log(`\n--> Trying: ${args.join(" ")}`);
+  const result = spawnSync(args[0], args.slice(1), {
+    encoding: "utf-8",
+    stdio: ["inherit", "pipe", "pipe"],
   });
+  outputLog = (result.stdout ?? "") + (result.stderr ?? "");
+  process.stdout.write(outputLog);
 
-  const programId = await deployment.deploy(client, deployerKeypair);
-  const programIdStr = programId.toString();
+  if (result.status === 0 && !outputLog.toLowerCase().includes("error:")) {
+    deployed = true;
+    break;
+  }
+}
 
-  console.log(`\n✓ Program deployed: ${programIdStr}`);
-  console.log(`  Explorer: https://devnet.rialo.io/program/${programIdStr}`);
+if (!deployed) {
+  console.error("\nERROR: All deploy attempts failed.");
+  process.exit(1);
+}
+
+// ── Extract program ID from output ──────────────────────────────────────────
+
+const programIdMatch = outputLog.match(/[A-Za-z0-9]{32,}/g);
+const programId = programIdMatch ? programIdMatch[programIdMatch.length - 1] : null;
+
+if (programId) {
+  console.log(`\n✓ Program deployed: ${programId}`);
+  console.log(`  Explorer: https://devnet.rialo.io/program/${programId}`);
 
   // ── Update AGENTS.md ──────────────────────────────────────────────────────
   const agentsPath = "AGENTS.md";
@@ -148,24 +145,30 @@ async function main() {
     ? fs.readFileSync(agentsPath, "utf-8")
     : "";
 
-  const programSection = `\n## Deployed Program\n\n- **Chain**: Rialo Devnet\n- **Program ID**: \`${programIdStr}\`\n- **Binary**: PolkaVM (.polkavm)\n- **Deployed at**: ${new Date().toISOString()}\n- **Explorer**: https://devnet.rialo.io/program/${programIdStr}\n`;
+  const section = [
+    "## Deployed Program",
+    "",
+    `- **Chain**: Rialo ${NETWORK.charAt(0).toUpperCase() + NETWORK.slice(1)}`,
+    `- **Program ID**: \`${programId}\``,
+    "- **Binary**: PolkaVM (.polkavm)",
+    `- **Deployed at**: ${new Date().toISOString()}`,
+    `- **Explorer**: https://devnet.rialo.io/program/${programId}`,
+    "",
+  ].join("\n");
 
   if (agentsContent.includes("## Deployed Program")) {
     agentsContent = agentsContent.replace(
-      /## Deployed Program[\s\S]*?(?=\n## |$)/,
-      programSection.trim() + "\n"
+      /## Deployed Program[\s\S]*?(?=\n## |\s*$)/,
+      section
     );
   } else {
-    agentsContent += programSection;
+    agentsContent += "\n" + section;
   }
 
   fs.writeFileSync(agentsPath, agentsContent);
-  console.log("✓ AGENTS.md updated with program ID");
-
-  console.log("\n=== Deploy complete ===");
+  console.log("✓ AGENTS.md updated");
+} else {
+  console.log("✓ Deploy appears successful (could not extract program ID from output)");
 }
 
-main().catch((err) => {
-  console.error("Deploy failed:", err);
-  process.exit(1);
-});
+console.log("\n=== Deploy complete ===");

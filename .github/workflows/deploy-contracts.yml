@@ -1,4 +1,4 @@
-name: Deploy Program to Rialo Devnet
+name: Build & Deploy Rialo Program
 
 on:
   push:
@@ -9,85 +9,283 @@ on:
       - ".github/workflows/deploy-contracts.yml"
   workflow_dispatch:
     inputs:
-      force:
-        description: "Force deploy even without program changes"
+      network:
+        description: "Target Rialo Network"
+        required: false
+        default: "devnet"
+        type: choice
+        options: [devnet, testnet]
+      deploy_contract:
+        description: "Deploy after build"
+        required: false
+        default: true
         type: boolean
-        default: false
 
 concurrency:
-  group: deploy-program
+  group: deploy-program-${{ github.ref }}
   cancel-in-progress: false  # never interrupt a live deploy
+
+env:
+  CONTRACT_DIR: program
+  RIALOMAN_VERSION: "0.3.0"
+  RIALO_RELEASE_VERSION: "stable@0.12.2"
+  RIALO_TOOLCHAIN_VERSION: "0.0.3"
 
 jobs:
   build-and-deploy:
-    name: Build PolkaVM + Deploy to Rialo Devnet
-    runs-on: ubuntu-latest
+    name: Build PolkaVM + Deploy to Rialo
+    runs-on: ubuntu-22.04
     environment: devnet
     permissions:
-      contents: write  # needed to commit updated AGENTS.md back to the repo
+      contents: write  # to commit updated AGENTS.md
 
     steps:
       - uses: actions/checkout@v4
 
-      # ── Install rialoman + rialo toolchain ──────────────────────────────────
+      # ── System deps ─────────────────────────────────────────────────────────
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev curl git \
+            clang llvm binaryen ca-certificates cmake ninja-build \
+            protobuf-compiler python3 xz-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip1
+
+      # ── Install rialoman 0.3.0 ───────────────────────────────────────────────
       - name: Install rialoman
         run: |
-          curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh | bash
+          set -euo pipefail
+          curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh \
+            | bash -s -- --no-modify-path --default-toolchain none
           echo "$HOME/.local/share/rialo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          rialoman --version
 
-      - name: Install Rialo stable release + Rust toolchain
+      # ── Install Rialo stable@0.12.2 + rialo-rust 0.0.3 ─────────────────────
+      - name: Install Rialo release + toolchain
         run: |
-          rialoman install stable@latest
-          rialoman use stable@latest
+          set -euo pipefail
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          rialoman install "${RIALO_RELEASE_VERSION}" --default
+          rialoman use "${RIALO_RELEASE_VERSION}" || true
+          if ! rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"; then
+            echo "::notice::Prebuilt toolchain not available — will use cargo +rialo fallback"
+          fi
+          rialoman list || true
+          rustup toolchain list || true
 
       # ── Cache ───────────────────────────────────────────────────────────────
       - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            program/target
-          key: rialo-polkavm-${{ runner.os }}-${{ hashFiles('program/Cargo.lock') }}
-          restore-keys: rialo-polkavm-${{ runner.os }}-
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            program/target/
+          key: ${{ runner.os }}-cargo-rialo-${{ hashFiles('program/Cargo.lock', 'program/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-rialo-
 
-      # ── Build ───────────────────────────────────────────────────────────────
-      - name: Build .polkavm binary
+      # ── Patch zerocopy if needed ─────────────────────────────────────────────
+      - name: Patch zerocopy
         working-directory: program
-        run: cargo +rialo build --release
-
-      - name: Locate .polkavm artifact
-        id: artifact
         run: |
-          path=$(find program/target -name "hugefun_program.polkavm" | head -1)
-          if [ -z "$path" ]; then
-            path=$(find program/target -name "*.polkavm" | head -1)
-          fi
-          if [ -z "$path" ]; then
-            echo "ERROR: no .polkavm file found" && exit 1
-          fi
-          echo "path=$path" >> "$GITHUB_OUTPUT"
-          echo "Found: $path ($(du -sh $path | cut -f1))"
+          cargo update -p zerocopy --precise 0.7.35 2>/dev/null \
+            || cargo update -p zerocopy \
+            || true
 
-      # ── JS deps for deploy script ───────────────────────────────────────────
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "latest"
-
-      - name: Install JS dependencies
-        run: bun install --frozen-lockfile
-
-      # ── Deploy ──────────────────────────────────────────────────────────────
-      - name: Deploy program to Rialo devnet
+      # ── Build via rialo-build ────────────────────────────────────────────────
+      - name: Build .polkavm binary
         env:
-          RIALO_DEVNET_RPC: ${{ vars.RIALO_DEVNET_RPC || 'https://devnet.rialo.io:4101' }}
-          DEPLOYER_SECRET_HEX: ${{ secrets.DEPLOYER_SECRET_HEX }}
-          PROGRAM_KEYPAIR_HEX: ${{ secrets.PROGRAM_KEYPAIR_HEX }}
-          POLKAVM_PATH: ${{ steps.artifact.outputs.path }}
-        run: bun run scripts/deploy-program.ts
+          RUST_BACKTRACE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          mkdir -p program/artifacts
+          if ! rialo-build \
+            --program-path program \
+            --output-dir program/artifacts; then
+            echo "::error::rialo-build failed — falling back to cargo +rialo for error detail:"
+            cargo +rialo build --manifest-path program/Cargo.toml --release --verbose || true
+            exit 1
+          fi
+          echo "=== Artifacts ==="
+          ls -la program/artifacts/
+          sha256sum program/artifacts/* || true
 
-      # ── Commit deployed address back to repo ────────────────────────────────
+      # ── Verify artifact ──────────────────────────────────────────────────────
+      - name: Verify .polkavm artifact
+        run: |
+          COUNT=$(find program/artifacts -name "*.polkavm" | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No .polkavm file produced by rialo-build"
+            exit 1
+          fi
+          POLKAVM_FILE=$(find program/artifacts -name "*.polkavm" | head -1)
+          echo "POLKAVM_PATH=${POLKAVM_FILE}" >> "$GITHUB_ENV"
+          echo "Found: ${POLKAVM_FILE}"
+
+      # ── Upload artifact ──────────────────────────────────────────────────────
+      - name: Upload .polkavm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hugefun-program-polkavm
+          path: program/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      # ── Configure deployer keypair ───────────────────────────────────────────
+      - name: Configure deployer keypair
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_contract }}
+        env:
+          RIALO_DEPLOY_KEY: ${{ secrets.RIALO_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.config/rialo ~/.config/solana
+
+          python3 - << 'PYEOF'
+          import os, sys, json, hashlib
+
+          def make_disposable_keypair():
+              """RFC 8032 Ed25519 keypair — disposable, used only when no secret set."""
+              import hashlib, os
+              p = 2**255 - 19
+              d = -121665 * pow(121666, p - 2, p) % p
+              def recover_x(y, sign):
+                  x2 = (y*y - 1) * pow(d*y*y + 1, p - 2, p) % p
+                  x = pow(x2, (p + 3) // 8, p)
+                  if (x*x - x2) % p != 0: x = (x * pow(2, (p - 1) // 4, p)) % p
+                  if (x & 1) != sign: x = p - x
+                  return x
+              By = 4 * pow(5, p - 2, p) % p
+              Bx = recover_x(By, 0)
+              B = (Bx, By)
+              def add(P, Q):
+                  x1,y1=P; x2,y2=Q
+                  x3=(x1*y2+x2*y1)*pow(1+d*x1*x2*y1*y2,p-2,p)%p
+                  y3=(y1*y2+x1*x2)*pow(1-d*x1*x2*y1*y2,p-2,p)%p
+                  return (x3,y3)
+              def mul(s, P):
+                  Q=(0,1)
+                  while s>0:
+                      if s&1: Q=add(Q,P)
+                      P=add(P,P); s>>=1
+                  return Q
+              seed = os.urandom(32)
+              h = hashlib.sha512(seed).digest()
+              a = bytearray(h[:32]); a[0]&=248; a[31]&=127; a[31]|=64
+              A = mul(int.from_bytes(a,"little"), B)
+              pub = bytearray(A[1].to_bytes(32,"little")); pub[31]|=((A[0]&1)<<7)
+              return list(seed + bytes(pub))
+
+          key_env = os.environ.get("RIALO_DEPLOY_KEY", "").strip()
+          if key_env:
+              print("Loading deployer keypair from RIALO_DEPLOY_KEY secret...")
+              try:
+                  raw_key = json.loads(key_env)
+              except Exception:
+                  print("::error::RIALO_DEPLOY_KEY must be a JSON array of 64 integers")
+                  sys.exit(1)
+          else:
+              print("::notice::RIALO_DEPLOY_KEY not set — generating disposable keypair")
+              raw_key = make_disposable_keypair()
+
+          if not isinstance(raw_key, list) or len(raw_key) != 64:
+              print("::error::Keypair must be a list of 64 integers (0..255)")
+              sys.exit(1)
+
+          for path in [
+              os.path.expanduser("~/.config/rialo/id.json"),
+              os.path.expanduser("~/.config/rialo/deployer.keypair"),
+              os.path.expanduser("~/.config/solana/id.json"),
+          ]:
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              with open(path, "w") as f:
+                  json.dump(raw_key, f)
+              os.chmod(path, 0o600)
+          print("Deployer keypair configured.")
+          PYEOF
+
+      # ── Airdrop if needed ────────────────────────────────────────────────────
+      - name: Airdrop deployer (devnet)
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_contract) && (github.event_name != 'workflow_dispatch' || inputs.network == 'devnet') }}
+        run: |
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          NET="${{ inputs.network || 'devnet' }}"
+          rialo airdrop 2 --keypair ~/.config/rialo/id.json --url "${NET}" || \
+          rialo client airdrop -n "${NET}" --amount 2 || \
+          echo "::notice::Airdrop attempt complete (may fail on testnet — fund manually)"
+          sleep 3
+
+      # ── Deploy ───────────────────────────────────────────────────────────────
+      - name: Deploy program to Rialo
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_contract }}
+        run: |
+          set -uo pipefail
+          export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
+          NET="${{ inputs.network || 'devnet' }}"
+          KEYPAIR="$HOME/.config/rialo/id.json"
+          BIN="${POLKAVM_PATH}"
+
+          echo "Deploying: ${BIN}"
+          echo "Network:   ${NET}"
+
+          DEPLOYED=0
+          for CMD in \
+            "rialo program deploy ${BIN} --keypair ${KEYPAIR} --url ${NET}" \
+            "rialo program deploy ${BIN} -k ${KEYPAIR} -u ${NET}" \
+            "rialo client program deploy -n ${NET} ${BIN}"; do
+            echo "--> Trying: ${CMD}"
+            if eval "${CMD}" 2>&1 | tee /tmp/deploy.log && ! grep -qi "error:" /tmp/deploy.log; then
+              DEPLOYED=1; break
+            fi
+          done
+
+          if [ "${DEPLOYED}" -eq 0 ]; then
+            echo "::error::All deploy attempts failed:"
+            cat /tmp/deploy.log
+            exit 1
+          fi
+
+          # Extract program ID from deploy output
+          PROGRAM_ID=$(grep -oE '[A-Za-z0-9]{32,}' /tmp/deploy.log | tail -1 || echo "unknown")
+          echo "PROGRAM_ID=${PROGRAM_ID}" >> "$GITHUB_ENV"
+          echo "Deployed program ID: ${PROGRAM_ID}"
+
+      # ── Commit program ID back to repo ───────────────────────────────────────
+      - name: Update AGENTS.md with program ID
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_contract) && env.PROGRAM_ID != '' && env.PROGRAM_ID != 'unknown' }}
+        run: |
+          set -euo pipefail
+          SECTION="## Deployed Program
+
+- **Chain**: Rialo Devnet
+- **Program ID**: \`${PROGRAM_ID}\`
+- **Binary**: PolkaVM (.polkavm)
+- **Deployed at**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+- **Explorer**: https://devnet.rialo.io/program/${PROGRAM_ID}"
+
+          if grep -q "## Deployed Program" AGENTS.md; then
+            # Replace existing section
+            python3 -c "
+          import re, sys
+          content = open('AGENTS.md').read()
+          section = open('/dev/stdin').read()
+          content = re.sub(r'## Deployed Program.*?(?=\n## |\Z)', section, content, flags=re.DOTALL)
+          open('AGENTS.md','w').write(content)
+          " <<< "${SECTION}"
+          else
+            printf '\n%s\n' "${SECTION}" >> AGENTS.md
+          fi
+
       - name: Commit updated AGENTS.md
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.deploy_contract) && env.PROGRAM_ID != '' && env.PROGRAM_ID != 'unknown' }}
         uses: EndBug/add-and-commit@v9
         with:
           add: AGENTS.md

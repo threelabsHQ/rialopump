@@ -6,16 +6,27 @@ description = "hugefun bonding-curve token factory program for Rialo devnet"
 license = "MIT"
 
 [lib]
-crate-type = ["cdylib", "lib"]
+crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [features]
+default = []
+# Disable the PolkaVM entrypoint when building for the host (cargo check / tests)
 no-entrypoint = []
 
 [dependencies]
-# Rialo's own program SDK — mirrors the Solana SDK API but targets RISC-V/PolkaVM.
-# rialo-s-program bundles account_info, pubkey, program_error, system_instruction, sysvar etc.
-rialo-s-program = "0.18"
-# Entrypoint macro lives in a separate crate
-rialo-s-program-entrypoint = "0.18"
+# Rialo program SDK — mirrors Solana SDK, targets RISC-V/PolkaVM.
+# Pinned to 0.12.2 matching the rialoman stable@0.12.2 toolchain release.
+rialo-s-program = { version = "0.12.2", default-features = false }
+rialo-s-program-error = { version = "0.12.2", features = ["borsh"] }
 borsh = { version = "1", features = ["derive"] }
+
+[lints.rust]
+future_incompatible = "warn"
+nonstandard_style = "warn"
+rust_2018_idioms = "warn"
+
+[lints.clippy]
+all = "warn"
+arithmetic_side_effects = "warn"
+integer_division = "warn"

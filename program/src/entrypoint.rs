@@ -1,4 +1,4 @@
-use rialo_s_program_entrypoint::entrypoint;
+use rialo_s_program::entrypoint;
 
 use crate::processor::process_instruction;
 

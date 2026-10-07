@@ -1,0 +1,4 @@
+# Pinned Rialo Rust toolchain version matching rialoman stable@0.12.2
+# This file is read by rustup/cargo +rialo when building inside the program/ directory.
+[toolchain]
+channel = "rialo"
