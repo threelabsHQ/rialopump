@@ -36,5 +36,7 @@ bun run dev
 ## Deployed Program
 
 - **Chain**: Rialo Devnet
-- **Program ID**: (not yet deployed — will be written here by CI on next successful deploy)
+- **Program ID**: `AqSikYubk5DEygNhAZh1rSuVvrtNyHTUveLrze1QHn3R`
 - **Binary**: PolkaVM (.polkavm)
+- **Deployed at**: 2026-10-07T10:09:08Z
+- **Explorer**: https://rialo-explorer-devnet-direct.vercel.app/accounts/AqSikYubk5DEygNhAZh1rSuVvrtNyHTUveLrze1QHn3R

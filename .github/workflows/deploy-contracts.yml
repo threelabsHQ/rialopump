@@ -180,8 +180,8 @@ jobs:
             exit 1
           fi
 
-          # Extract program ID — only accept a real base58 address printed by the CLI
-          PROGRAM_ID=$(grep -oiE 'program id[: ]+[A-Za-z0-9]{32,}' /tmp/deploy.log \
+          # Extract program ID — CLI prints "Program deployed at <addr>"
+          PROGRAM_ID=$(grep -oiE '(program deployed at|program id)[: ]+[A-Za-z0-9]{32,}' /tmp/deploy.log \
                        | grep -oE '[A-Za-z0-9]{32,}$' | head -1 || true)
           if [ -z "${PROGRAM_ID}" ]; then
             echo "::warning::Could not parse program ID from deploy output — check the log above"
