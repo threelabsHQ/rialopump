@@ -3,11 +3,13 @@ use rialo_s_program::{
     account_info::{next_account_info, AccountInfo},
     entrypoint::ProgramResult,
     msg,
+    program::invoke,
     program::invoke_signed,
     program_error::ProgramError,
     pubkey::Pubkey,
+    rent::Rent,
     system_instruction,
-    sysvar::{rent::Rent, Sysvar},
+    sysvar::Sysvar,
 };
 
 use crate::{
@@ -25,9 +27,11 @@ pub fn process_instruction(
         .map_err(|_| LaunchpadError::InvalidInstruction)?;
 
     match instruction {
-        LaunchpadInstruction::CreateToken { token_id, name, symbol, description, image_url, token_tax_bps } => {
-            process_create_token(program_id, accounts, token_id, name, symbol, description, image_url, token_tax_bps)
-        }
+        LaunchpadInstruction::CreateToken {
+            token_id, name, symbol, description, image_url, token_tax_bps,
+        } => process_create_token(
+            program_id, accounts, token_id, name, symbol, description, image_url, token_tax_bps,
+        ),
         LaunchpadInstruction::Buy { token_id, rlo_amount, min_tokens_out } => {
             process_buy(program_id, accounts, token_id, rlo_amount, min_tokens_out)
         }
@@ -60,12 +64,12 @@ fn find_pda(program_id: &Pubkey, seeds: &[&[u8]]) -> (Pubkey, u8) {
     Pubkey::find_program_address(seeds, program_id)
 }
 
-fn load_state(account: &AccountInfo) -> Result<TokenState, ProgramError> {
+fn load_state(account: &AccountInfo<'_>) -> Result<TokenState, ProgramError> {
     let data = account.try_borrow_data()?;
     TokenState::try_from_slice(&data).map_err(|_| LaunchpadError::NotInitialized.into())
 }
 
-fn save_state(account: &AccountInfo, state: &TokenState) -> ProgramResult {
+fn save_state(account: &AccountInfo<'_>, state: &TokenState) -> ProgramResult {
     let serialized = borsh::to_vec(state).map_err(|_| ProgramError::InvalidAccountData)?;
     let mut data = account.try_borrow_mut_data()?;
     if serialized.len() > data.len() {
@@ -75,22 +79,69 @@ fn save_state(account: &AccountInfo, state: &TokenState) -> ProgramResult {
     Ok(())
 }
 
-/// Transfer lamports from one account to another via system program.
-/// Pass signer_seeds if the `from` account is a PDA.
-fn transfer_lamports<'a>(
+/// Inbound transfer: user (signer) → any account.
+/// Uses system_instruction::transfer + invoke. Works for transfers TO accounts
+/// carrying data (they can receive; only FROM is restricted).
+fn transfer_in<'a>(
     from: &AccountInfo<'a>,
     to: &AccountInfo<'a>,
     system: &AccountInfo<'a>,
     amount: u64,
-    signer_seeds: Option<&[&[u8]]>,
 ) -> ProgramResult {
-    if amount == 0 { return Ok(()); }
-    let ix = system_instruction::transfer(from.key, to.key, amount);
-    let accounts = &[from.clone(), to.clone(), system.clone()];
-    match signer_seeds {
-        Some(seeds) => invoke_signed(&ix, accounts, &[seeds]),
-        None => invoke_signed(&ix, accounts, &[]),
+    if amount == 0 {
+        return Ok(());
     }
+    invoke(
+        &system_instruction::transfer(from.key, to.key, amount),
+        &[from.clone(), to.clone(), system.clone()],
+    )
+}
+
+/// Inbound via invoke_signed: PDA (signer via seeds) → any account.
+/// Used when the fee_vault PDA (no data) pays out — CPI is fine there
+/// since fee_vault carries no data.
+fn transfer_pda_out<'a>(
+    from: &AccountInfo<'a>,
+    to: &AccountInfo<'a>,
+    system: &AccountInfo<'a>,
+    amount: u64,
+    signer_seeds: &[&[u8]],
+) -> ProgramResult {
+    if amount == 0 {
+        return Ok(());
+    }
+    invoke_signed(
+        &system_instruction::transfer(from.key, to.key, amount),
+        &[from.clone(), to.clone(), system.clone()],
+        &[signer_seeds],
+    )
+}
+
+/// Outbound from a data-carrying PDA: direct balance manipulation.
+/// System Program refuses CPI transfer from accounts that carry data.
+/// Pattern from rexo-ref vault.rs line 220-221.
+fn transfer_data_pda_out<'a>(
+    from: &AccountInfo<'a>,
+    to: &AccountInfo<'a>,
+    amount: u64,
+) -> ProgramResult {
+    if amount == 0 {
+        return Ok(());
+    }
+    let rent = Rent::get()?;
+    let reserve = rent.minimum_balance(from.data_len());
+    let balance = from.kelvins();
+    let available = balance.saturating_sub(reserve);
+    if available < amount {
+        msg!(
+            "pda {} balance={} reserve={} available={} requested={}",
+            from.key, balance, reserve, available, amount
+        );
+        return Err(LaunchpadError::InsufficientBalance.into());
+    }
+    **from.try_borrow_mut_kelvins()? -= amount;
+    **to.try_borrow_mut_kelvins()? += amount;
+    Ok(())
 }
 
 // ── CreateToken ────────────────────────────────────────────────────────────────
@@ -98,7 +149,7 @@ fn transfer_lamports<'a>(
 #[allow(clippy::too_many_arguments)]
 fn process_create_token(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    accounts: &[AccountInfo<'_>],
     token_id: [u8; 16],
     name: String,
     symbol: String,
@@ -115,7 +166,6 @@ fn process_create_token(
     if !creator_info.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
     }
-    // Input validation
     if name.is_empty() || name.len() > MAX_NAME_LEN {
         return Err(LaunchpadError::InvalidInstruction.into());
     }
@@ -154,9 +204,9 @@ fn process_create_token(
         description, image_url, token_tax_bps,
     );
 
-    // Allocate token_state account (add 128 bytes headroom)
+    // Allocate token_state PDA (add 256 bytes headroom for future fields)
     let serialized = borsh::to_vec(&state).map_err(|_| ProgramError::InvalidAccountData)?;
-    let ts_space = serialized.len() + 128;
+    let ts_space = serialized.len().saturating_add(256);
     let rent = Rent::get()?;
     let ts_lamports = rent.minimum_balance(ts_space);
 
@@ -173,31 +223,33 @@ fn process_create_token(
     )?;
     save_state(token_state_info, &state)?;
 
-    // Allocate fee_vault account (0 data, just rent-exempt)
-    if fee_vault_info.data_is_empty() {
-        let fv_lamports = rent.minimum_balance(0);
-        let mut fv_signer = fv_seeds_raw.clone();
-        fv_signer.push(vec![fv_bump]);
-        let fv_signer_ref: Vec<&[u8]> = fv_signer.iter().map(|s| s.as_slice()).collect();
+    // Allocate fee_vault PDA — 1 byte of data so it's program-owned and
+    // survives rent collection (same pattern as rexo vault.rs).
+    let fv_space: u64 = 1;
+    let fv_lamports = rent.minimum_balance(fv_space as usize);
+    let mut fv_signer = fv_seeds_raw.clone();
+    fv_signer.push(vec![fv_bump]);
+    let fv_signer_ref: Vec<&[u8]> = fv_signer.iter().map(|s| s.as_slice()).collect();
 
+    if fee_vault_info.data_is_empty() {
         invoke_signed(
             &system_instruction::create_account(
-                creator_info.key, &fv_pda, fv_lamports, 0, program_id,
+                creator_info.key, &fv_pda, fv_lamports, fv_space, program_id,
             ),
             &[creator_info.clone(), fee_vault_info.clone(), system_info.clone()],
             &[&fv_signer_ref],
         )?;
     }
 
-    // Charge creation fee → fee_vault
-    transfer_lamports(
+    // Charge creation fee → fee_vault (user is signer, so invoke is fine)
+    transfer_in(
         creator_info, fee_vault_info, system_info,
-        TokenState::CREATION_FEE_KELVIN, None,
+        TokenState::CREATION_FEE_KELVIN,
     )?;
 
     msg!(
-        "CreateToken: {} ({}) id={:?} tax={}bps creation_fee={}k",
-        name, symbol, token_id, token_tax_bps, TokenState::CREATION_FEE_KELVIN
+        "CreateToken: {} ({}) id={:?} tax={}bps",
+        name, symbol, token_id, token_tax_bps
     );
     Ok(())
 }
@@ -206,7 +258,7 @@ fn process_create_token(
 
 fn process_buy(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    accounts: &[AccountInfo<'_>],
     token_id: [u8; 16],
     rlo_amount: u64,
     min_tokens_out: u64,
@@ -233,12 +285,15 @@ fn process_buy(
     let ts_seeds_raw = token_state_seeds(&token_id);
     let ts_seeds: Vec<&[u8]> = ts_seeds_raw.iter().map(|s| s.as_slice()).collect();
     let (ts_pda, _) = find_pda(program_id, &ts_seeds);
-    if &ts_pda != token_state_info.key { return Err(ProgramError::InvalidArgument); }
-
+    if &ts_pda != token_state_info.key {
+        return Err(ProgramError::InvalidArgument);
+    }
     let fv_seeds_raw = fee_vault_seeds(&token_id);
     let fv_seeds: Vec<&[u8]> = fv_seeds_raw.iter().map(|s| s.as_slice()).collect();
     let (fv_pda, _) = find_pda(program_id, &fv_seeds);
-    if &fv_pda != fee_vault_info.key { return Err(ProgramError::InvalidArgument); }
+    if &fv_pda != fee_vault_info.key {
+        return Err(ProgramError::InvalidArgument);
+    }
 
     let (rlo_into_curve, platform_fee, creator_tax) = state.apply_buy_fees(rlo_amount);
 
@@ -246,38 +301,40 @@ fn process_buy(
         .calc_buy(rlo_into_curve)
         .ok_or(LaunchpadError::Overflow)?;
 
-    // Cap at available supply
     let available = TokenState::TOTAL_SUPPLY.saturating_sub(state.tokens_sold);
     let tokens_out = tokens_out.min(available);
 
-    if tokens_out == 0 { return Err(LaunchpadError::NoTokensAvailable.into()); }
-    if tokens_out < min_tokens_out { return Err(LaunchpadError::SlippageExceeded.into()); }
+    if tokens_out == 0 {
+        return Err(LaunchpadError::NoTokensAvailable.into());
+    }
+    if tokens_out < min_tokens_out {
+        return Err(LaunchpadError::SlippageExceeded.into());
+    }
 
-    // Transfers: fee → fee_vault, creator_tax → token_state (held for claim), curve_rlo → token_state
-    transfer_lamports(buyer_info, fee_vault_info, system_info, platform_fee, None)?;
-    transfer_lamports(buyer_info, token_state_info, system_info, creator_tax, None)?;
-    transfer_lamports(buyer_info, token_state_info, system_info, rlo_into_curve, None)?;
+    // platform_fee → fee_vault (user signer, destination has data but can receive)
+    transfer_in(buyer_info, fee_vault_info, system_info, platform_fee)?;
+    // creator_tax + curve_rlo → token_state (user signer, destination has data but can receive)
+    transfer_in(buyer_info, token_state_info, system_info,
+        creator_tax.saturating_add(rlo_into_curve))?;
 
-    // Update state
-    state.virtual_rlo = new_vr;
+    state.virtual_rlo    = new_vr;
     state.virtual_tokens = new_vt;
     state.real_rlo_raised = state.real_rlo_raised.saturating_add(rlo_into_curve);
-    state.tokens_sold = state.tokens_sold.saturating_add(tokens_out);
-    state.fees_collected = state.fees_collected.saturating_add(platform_fee);
+    state.tokens_sold     = state.tokens_sold.saturating_add(tokens_out);
+    state.fees_collected  = state.fees_collected.saturating_add(platform_fee);
     state.creator_earnings = state.creator_earnings.saturating_add(creator_tax);
 
-    // Graduation check: real RLO raised >= target
     if state.real_rlo_raised >= TokenState::GRADUATION_RLO_TARGET {
         state.graduated = true;
         msg!(
-            "GRADUATION: {} ({}) raised {} kelvin — token is now graduated!",
+            "GRADUATION: {} ({}) raised {}k — graduated!",
             state.name, state.symbol, state.real_rlo_raised
         );
     }
 
     save_state(token_state_info, &state)?;
     msg!(
-        "Buy: out={} tokens rlo_spent={} fee={} tax={} raised_total={}",
+        "Buy: out={} rlo_spent={} fee={} tax={} raised={}",
         tokens_out, rlo_amount, platform_fee, creator_tax, state.real_rlo_raised
     );
     Ok(())
@@ -287,7 +344,7 @@ fn process_buy(
 
 fn process_sell(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    accounts: &[AccountInfo<'_>],
     token_id: [u8; 16],
     token_amount: u64,
     min_rlo_out: u64,
@@ -301,21 +358,27 @@ fn process_sell(
     if !seller_info.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
     }
-    if token_amount == 0 { return Err(LaunchpadError::InsufficientBalance.into()); }
+    if token_amount == 0 {
+        return Err(LaunchpadError::InsufficientBalance.into());
+    }
 
     let mut state = load_state(token_state_info)?;
-    if state.graduated { return Err(LaunchpadError::TokenGraduated.into()); }
+    if state.graduated {
+        return Err(LaunchpadError::TokenGraduated.into());
+    }
 
-    // Verify PDAs
     let ts_seeds_raw = token_state_seeds(&token_id);
     let ts_seeds: Vec<&[u8]> = ts_seeds_raw.iter().map(|s| s.as_slice()).collect();
-    let (ts_pda, ts_bump) = find_pda(program_id, &ts_seeds);
-    if &ts_pda != token_state_info.key { return Err(ProgramError::InvalidArgument); }
-
+    let (ts_pda, _) = find_pda(program_id, &ts_seeds);
+    if &ts_pda != token_state_info.key {
+        return Err(ProgramError::InvalidArgument);
+    }
     let fv_seeds_raw = fee_vault_seeds(&token_id);
     let fv_seeds: Vec<&[u8]> = fv_seeds_raw.iter().map(|s| s.as_slice()).collect();
-    let (fv_pda, _) = find_pda(program_id, &fv_seeds);
-    if &fv_pda != fee_vault_info.key { return Err(ProgramError::InvalidArgument); }
+    let (fv_pda, fv_bump) = find_pda(program_id, &fv_seeds);
+    if &fv_pda != fee_vault_info.key {
+        return Err(ProgramError::InvalidArgument);
+    }
 
     let (rlo_before_fee, new_vr, new_vt) = state
         .calc_sell(token_amount)
@@ -323,30 +386,39 @@ fn process_sell(
 
     let (rlo_to_seller, platform_fee, creator_tax) = state.apply_sell_fees(rlo_before_fee);
 
-    if rlo_to_seller == 0 { return Err(LaunchpadError::InsufficientBalance.into()); }
-    if rlo_to_seller < min_rlo_out { return Err(LaunchpadError::SlippageExceeded.into()); }
+    if rlo_to_seller == 0 {
+        return Err(LaunchpadError::InsufficientBalance.into());
+    }
+    if rlo_to_seller < min_rlo_out {
+        return Err(LaunchpadError::SlippageExceeded.into());
+    }
 
-    // Signer seeds for token_state PDA (it pays out)
-    let mut ts_signer = ts_seeds_raw.clone();
-    ts_signer.push(vec![ts_bump]);
-    let ts_signer_ref: Vec<&[u8]> = ts_signer.iter().map(|s| s.as_slice()).collect();
+    // token_state carries data → must use direct balance manipulation for payouts
+    // rlo_to_seller → seller
+    transfer_data_pda_out(token_state_info, seller_info, rlo_to_seller)?;
+    // platform_fee: move from token_state to fee_vault (both program-owned)
+    transfer_data_pda_out(token_state_info, fee_vault_info, platform_fee)?;
+    // creator_tax stays in token_state — already there, just update counter
 
-    // Transfers: curve RLO → seller, fee → fee_vault, creator_tax → stays in token_state
-    transfer_lamports(token_state_info, seller_info, system_info, rlo_to_seller, Some(&ts_signer_ref))?;
-    transfer_lamports(token_state_info, fee_vault_info, system_info, platform_fee, Some(&ts_signer_ref))?;
-    // creator_tax stays in token_state (already there), just update the counter
+    // fee_vault has data (1 byte) — also use direct balance for its inbound
+    // (receiving is always fine, but let's be consistent and not need system_info here)
+    // Actually the credit above covered it; fee_vault received via direct debit of token_state
 
-    // Update state
-    state.virtual_rlo = new_vr;
+    // Unused: fv_bump — suppress lint
+    let _ = fv_bump;
+    // Unused: system_info kept in account list for ABI compatibility
+    let _ = system_info;
+
+    state.virtual_rlo    = new_vr;
     state.virtual_tokens = new_vt;
     state.real_rlo_raised = state.real_rlo_raised.saturating_sub(rlo_before_fee);
-    state.tokens_sold = state.tokens_sold.saturating_sub(token_amount);
-    state.fees_collected = state.fees_collected.saturating_add(platform_fee);
+    state.tokens_sold     = state.tokens_sold.saturating_sub(token_amount);
+    state.fees_collected  = state.fees_collected.saturating_add(platform_fee);
     state.creator_earnings = state.creator_earnings.saturating_add(creator_tax);
 
     save_state(token_state_info, &state)?;
     msg!(
-        "Sell: in={} tokens rlo_out={} fee={} tax={}",
+        "Sell: in={} rlo_out={} fee={} tax={}",
         token_amount, rlo_to_seller, platform_fee, creator_tax
     );
     Ok(())
@@ -356,7 +428,7 @@ fn process_sell(
 
 fn process_withdraw_fees(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    accounts: &[AccountInfo<'_>],
     token_id: [u8; 16],
 ) -> ProgramResult {
     let account_iter = &mut accounts.iter();
@@ -370,7 +442,6 @@ fn process_withdraw_fees(
     }
 
     let state = load_state(token_state_info)?;
-    // On devnet: only the token creator can sweep platform fees
     if authority_info.key != &state.creator {
         return Err(LaunchpadError::NotCreator.into());
     }
@@ -378,21 +449,29 @@ fn process_withdraw_fees(
     let fv_seeds_raw = fee_vault_seeds(&token_id);
     let fv_seeds: Vec<&[u8]> = fv_seeds_raw.iter().map(|s| s.as_slice()).collect();
     let (fv_pda, fv_bump) = find_pda(program_id, &fv_seeds);
-    if &fv_pda != fee_vault_info.key { return Err(ProgramError::InvalidArgument); }
+    if &fv_pda != fee_vault_info.key {
+        return Err(ProgramError::InvalidArgument);
+    }
 
     let rent = Rent::get()?;
-    let min_balance = rent.minimum_balance(0);
-    let balance = fee_vault_info.lamports();
-    if balance <= min_balance { return Err(LaunchpadError::NothingToClaim.into()); }
-    let to_withdraw = balance - min_balance;
+    // fee_vault has 1 byte of data → keep minimum balance for that
+    let reserve = rent.minimum_balance(fee_vault_info.data_len());
+    let balance = fee_vault_info.kelvins();
+    if balance <= reserve {
+        return Err(LaunchpadError::NothingToClaim.into());
+    }
+    let to_withdraw = balance.saturating_sub(reserve);
 
-    let mut fv_signer = fv_seeds_raw.clone();
-    fv_signer.push(vec![fv_bump]);
-    let fv_signer_ref: Vec<&[u8]> = fv_signer.iter().map(|s| s.as_slice()).collect();
+    // fee_vault has data (1 byte) → direct manipulation
+    **fee_vault_info.try_borrow_mut_kelvins()? -= to_withdraw;
+    **authority_info.try_borrow_mut_kelvins()? += to_withdraw;
 
-    transfer_lamports(fee_vault_info, authority_info, system_info, to_withdraw, Some(&fv_signer_ref))?;
+    // fv_bump, fv_signer, system_info kept for account list ABI compat
+    let _ = fv_bump;
+    let _ = fv_seeds;
+    let _ = system_info;
 
-    msg!("WithdrawFees: {} kelvin withdrawn by {}", to_withdraw, authority_info.key);
+    msg!("WithdrawFees: {}k withdrawn by {}", to_withdraw, authority_info.key);
     Ok(())
 }
 
@@ -400,13 +479,14 @@ fn process_withdraw_fees(
 
 fn process_claim_creator_earnings(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    accounts: &[AccountInfo<'_>],
     token_id: [u8; 16],
 ) -> ProgramResult {
     let account_iter = &mut accounts.iter();
     let creator_info     = next_account_info(account_iter)?;
     let token_state_info = next_account_info(account_iter)?;
-    let system_info      = next_account_info(account_iter)?;
+    // system_program included for ABI consistency
+    let _system_info     = next_account_info(account_iter)?;
 
     if !creator_info.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
@@ -419,22 +499,23 @@ fn process_claim_creator_earnings(
 
     let ts_seeds_raw = token_state_seeds(&token_id);
     let ts_seeds: Vec<&[u8]> = ts_seeds_raw.iter().map(|s| s.as_slice()).collect();
-    let (ts_pda, ts_bump) = find_pda(program_id, &ts_seeds);
-    if &ts_pda != token_state_info.key { return Err(ProgramError::InvalidArgument); }
+    let (ts_pda, _) = find_pda(program_id, &ts_seeds);
+    if &ts_pda != token_state_info.key {
+        return Err(ProgramError::InvalidArgument);
+    }
 
     let amount = state.creator_earnings;
-    if amount == 0 { return Err(LaunchpadError::NothingToClaim.into()); }
+    if amount == 0 {
+        return Err(LaunchpadError::NothingToClaim.into());
+    }
 
-    let mut ts_signer = ts_seeds_raw.clone();
-    ts_signer.push(vec![ts_bump]);
-    let ts_signer_ref: Vec<&[u8]> = ts_signer.iter().map(|s| s.as_slice()).collect();
-
-    transfer_lamports(token_state_info, creator_info, system_info, amount, Some(&ts_signer_ref))?;
+    // token_state carries data → direct balance manipulation
+    transfer_data_pda_out(token_state_info, creator_info, amount)?;
 
     state.creator_earnings = 0;
     save_state(token_state_info, &state)?;
 
-    msg!("ClaimCreatorEarnings: {} kelvin claimed by {}", amount, creator_info.key);
+    msg!("ClaimCreatorEarnings: {}k claimed by {}", amount, creator_info.key);
     Ok(())
 }
 
@@ -442,7 +523,7 @@ fn process_claim_creator_earnings(
 
 fn process_update_token_tax(
     program_id: &Pubkey,
-    accounts: &[AccountInfo],
+    accounts: &[AccountInfo<'_>],
     token_id: [u8; 16],
     new_tax_bps: u64,
 ) -> ProgramResult {
@@ -465,7 +546,9 @@ fn process_update_token_tax(
     let ts_seeds_raw = token_state_seeds(&token_id);
     let ts_seeds: Vec<&[u8]> = ts_seeds_raw.iter().map(|s| s.as_slice()).collect();
     let (ts_pda, _) = find_pda(program_id, &ts_seeds);
-    if &ts_pda != token_state_info.key { return Err(ProgramError::InvalidArgument); }
+    if &ts_pda != token_state_info.key {
+        return Err(ProgramError::InvalidArgument);
+    }
 
     state.token_tax_bps = new_tax_bps;
     save_state(token_state_info, &state)?;

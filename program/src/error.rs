@@ -1,33 +1,20 @@
 use rialo_s_program::program_error::ProgramError;
-use rialo_s_program_error::declare_error;
 
-declare_error! {
-    pub enum LaunchpadError {
-        #[msg("Invalid instruction data")]
-        InvalidInstruction,
-        #[msg("Token state already initialised")]
-        AlreadyInitialized,
-        #[msg("Token state not initialised")]
-        NotInitialized,
-        #[msg("Integer overflow in bonding curve math")]
-        Overflow,
-        #[msg("Buy amount is below the minimum (0.001 RLO)")]
-        BelowMinimumBuy,
-        #[msg("Token has graduated and can no longer be traded on the curve")]
-        TokenGraduated,
-        #[msg("Insufficient tokens available on curve")]
-        NoTokensAvailable,
-        #[msg("Slippage tolerance exceeded")]
-        SlippageExceeded,
-        #[msg("Insufficient balance")]
-        InsufficientBalance,
-        #[msg("Creator tax exceeds maximum (10%)")]
-        TaxTooHigh,
-        #[msg("Caller is not the token creator")]
-        NotCreator,
-        #[msg("Nothing to claim")]
-        NothingToClaim,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum LaunchpadError {
+    InvalidInstruction    = 0,
+    AlreadyInitialized    = 1,
+    NotInitialized        = 2,
+    Overflow              = 3,
+    BelowMinimumBuy       = 4,
+    TokenGraduated        = 5,
+    NoTokensAvailable     = 6,
+    SlippageExceeded      = 7,
+    InsufficientBalance   = 8,
+    TaxTooHigh            = 9,
+    NotCreator            = 10,
+    NothingToClaim        = 11,
 }
 
 impl From<LaunchpadError> for ProgramError {
