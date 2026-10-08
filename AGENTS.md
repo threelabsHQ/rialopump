@@ -36,7 +36,7 @@ bun run dev
 ## Deployed Program
 
 - **Chain**: Rialo Devnet
-- **Program ID**: `DNznNCC7PoWJZmqaReawTxWnws6mdeUwZMYmWrA1P5hC`
+- **Program ID**: `CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk`
 - **Binary**: PolkaVM (.polkavm)
-- **Deployed at**: 2026-10-07T10:19:06Z
-- **Explorer**: https://devnet.rialo.io/program/DNznNCC7PoWJZmqaReawTxWnws6mdeUwZMYmWrA1P5hC
+- **Deployed at**: 2026-10-08T09:48:10Z
+- **Explorer**: https://devnet.rialo.io/program/CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk
