@@ -1,29 +1,35 @@
 /**
  * Browser-side Rialo chain helpers.
- * Signs and sends transactions using the user's in-memory keypair.
+ * Signs transactions in-browser; submits via server RPC proxy (CORS).
  */
 import {
-  createRialoClient,
-  RIALO_DEVNET_CHAIN,
   Keypair,
   PublicKey,
 } from "@rialo/ts-cdk";
 import {
-  deserializeTokenState,
-  deriveTokenStatePda,
   buildTx,
   PROGRAM_ID,
   type RialoInstruction,
   type TokenState,
 } from "./program";
 
-// ─── Singleton client ─────────────────────────────────────────────────────────
+// ─── API base (Vite proxy strips /api prefix on dev) ──────────────────────────
+const API = "/api";
 
-let _client: ReturnType<typeof createRialoClient> | null = null;
-
-export function getRialoClient() {
-  if (!_client) _client = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
-  return _client;
+async function serverReq<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method: body !== undefined ? "POST" : "GET",
+    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { json = { error: text }; }
+  if (!res.ok) {
+    const err = (json as { error?: string })?.error ?? `HTTP ${res.status}`;
+    throw new Error(err);
+  }
+  return json as T;
 }
 
 // ─── Keypair from stored secretHex ───────────────────────────────────────────
@@ -35,51 +41,44 @@ export function keypairFromHex(secretHex: string): Keypair {
   return Keypair.fromSecretKey(bytes);
 }
 
-// ─── Balance ──────────────────────────────────────────────────────────────────
+// ─── Config hash prefix (via server proxy — browser can't call devnet RPC) ───
 
-export async function fetchBalance(pubkey: string): Promise<{ kelvin: bigint; rlo: number }> {
-  const client = getRialoClient();
-  const pk = PublicKey.fromString(pubkey);
-  const kelvin = await client.getBalance(pk);
-  return { kelvin, rlo: Number(kelvin) / 1_000_000_000 };
+async function getConfigHashPrefix(): Promise<bigint> {
+  const { configHashPrefix } = await serverReq<{ configHashPrefix: string }>("/rpc/config-hash");
+  return BigInt(configHashPrefix);
 }
 
-// ─── Fetch token state from chain ────────────────────────────────────────────
+// ─── Balance (via server — same reason) ──────────────────────────────────────
 
-export async function fetchTokenState(tokenId: Uint8Array): Promise<TokenState | null> {
-  const client = getRialoClient();
-  const { pda } = deriveTokenStatePda(tokenId);
+export async function fetchBalance(pubkey: string): Promise<{ kelvin: bigint; rlo: number }> {
+  const { kelvin } = await serverReq<{ kelvin: string; rlo: string }>(`/balance/${pubkey}`);
+  const k = BigInt(kelvin);
+  return { kelvin: k, rlo: Number(k) / 1_000_000_000 };
+}
+
+// ─── Fetch token state from chain (via server) ────────────────────────────────
+
+export async function fetchTokenState(tokenIdHex: string): Promise<TokenState | null> {
   try {
-    const info = await client.getAccountInfo(pda);
-    if (!info?.data) return null;
-    // RPC returns data as [base64String, "base64"] tuple
-    let data: Uint8Array;
-    if (info.data instanceof Uint8Array) {
-      data = info.data;
-    } else {
-      const raw = Array.isArray(info.data)
-        ? (info.data as [string, string])[0]
-        : (info.data as string);
-      data = new Uint8Array(Buffer.from(raw, "base64"));
-    }
-    return deserializeTokenState(data);
+    const data = await serverReq<TokenState | null>(`/tokens/${tokenIdHex}/state`);
+    return data;
   } catch {
     return null;
   }
 }
 
-// ─── Sign and send a transaction ──────────────────────────────────────────────
+// ─── Sign and send (sign in browser, broadcast via server proxy) ──────────────
 
 export async function signAndSend(
   instructions: RialoInstruction[],
   signer: Keypair
 ): Promise<string> {
-  const client = getRialoClient();
-  const configHashPrefix = await client.getConfigHashPrefix();
+  const configHashPrefix = await getConfigHashPrefix();
   const tx = buildTx(instructions, signer.publicKey, configHashPrefix, configHashPrefix);
   tx.sign(signer);
-  const confirmed = await client.sendAndConfirmTransaction(tx.serialize());
-  return confirmed.signature;
+  const txBase64 = Buffer.from(tx.serialize()).toString("base64");
+  const { signature } = await serverReq<{ signature: string }>("/rpc/send-tx", { txBase64 });
+  return signature;
 }
 
 // ─── Build signed tx bytes (base64) for server submission ────────────────────
@@ -88,26 +87,13 @@ export async function buildSignedTxBytes(
   instructions: RialoInstruction[],
   signer: Keypair
 ): Promise<string> {
-  const client = getRialoClient();
-  const validFrom = await client.getConfigHashPrefix();
-  const tx = buildTx(instructions, signer.publicKey, validFrom, validFrom);
+  const configHashPrefix = await getConfigHashPrefix();
+  const tx = buildTx(instructions, signer.publicKey, configHashPrefix, configHashPrefix);
   tx.sign(signer);
   return Buffer.from(tx.serialize()).toString("base64");
 }
 
-// ─── Airdrop ──────────────────────────────────────────────────────────────────
-
-export async function requestAirdrop(pubkey: string, rloAmount: number): Promise<string> {
-  const client = getRialoClient();
-  const pk = PublicKey.fromString(pubkey);
-  const kelvin = BigInt(Math.round(rloAmount * 1_000_000_000));
-  const confirmed = await client.requestAirdropAndConfirm(pk, kelvin);
-  return confirmed.signature;
-}
-
 // ─── Token ID encoding ────────────────────────────────────────────────────────
-// Token IDs are stored as 32-char hex strings representing 16 raw bytes.
-// Must match server/index.ts tokenIdToBytes() exactly.
 
 export function tokenIdToBytes(idHex: string): Uint8Array {
   const hex = idHex.replace(/-/g, "").slice(0, 32).padEnd(32, "0");
@@ -118,7 +104,6 @@ export function tokenIdToBytes(idHex: string): Uint8Array {
   return out;
 }
 
-/** Generate a random 16-byte token ID as a 32-char hex string. */
 export function makeTokenIdHex(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -127,3 +112,5 @@ export function makeTokenIdHex(): string {
 
 // Re-export PublicKey for callers that need it
 export { PublicKey, Keypair, PROGRAM_ID };
+
+

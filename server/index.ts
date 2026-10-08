@@ -204,7 +204,34 @@ app.get("/chain", async (_req, res) => {
       client.getBlockHeight(),
       client.getEpochInfo(),
     ]);
-    res.json({ blockHeight: height.toString(), epoch: epoch.epoch, slot: epoch.absoluteSlot.toString() });
+    // All fields stringified — getEpochInfo returns BigInt fields
+    res.json({
+      blockHeight: height.toString(),
+      epoch: epoch.epoch.toString(),
+      slot: epoch.absoluteSlot.toString(),
+    });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// RPC proxy — browser cannot call devnet RPC directly (CORS)
+app.post("/rpc/config-hash", async (_req, res) => {
+  try {
+    const configHashPrefix = await client.getConfigHashPrefix();
+    res.json({ configHashPrefix: configHashPrefix.toString() });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.post("/rpc/send-tx", async (req, res) => {
+  try {
+    const { txBase64 } = req.body as { txBase64?: string };
+    if (!txBase64) return res.status(400).json({ error: "txBase64 required" });
+    const txBytes = new Uint8Array(Buffer.from(txBase64, "base64"));
+    const confirmed = await client.sendAndConfirmTransaction(txBytes);
+    res.json({ signature: confirmed.signature });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
@@ -296,6 +323,21 @@ app.get("/tokens/:id", async (req, res) => {
     tokenTaxBps: t.tokenTaxBps || 0,
     creatorEarnings: t.creatorEarnings || 0,
     onchain: t.onchain,
+  });
+});
+
+// Raw onchain token state (for browser reads via proxy)
+app.get("/tokens/:id/state", async (req, res) => {
+  const t = tokens.get(req.params.id);
+  if (!t) return res.status(404).json(null);
+  await syncOnchainState(t);
+  const state = buildVirtualState(t);
+  res.json({
+    tokensSold: t.tokenSupply,
+    realRloRaised: t.realRloRaised || state.realRloRaised,
+    creatorEarnings: t.creatorEarnings || 0,
+    tokenTaxBps: t.tokenTaxBps || 0,
+    graduated: t.graduated,
   });
 });
 
