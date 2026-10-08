@@ -12,18 +12,18 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-// ─── Rialo client ────────────────────────────────────────────────────────────
+// ─── Rialo client ─────────────────────────────────────────────────────────────
 const RPC_URL = process.env.RIALO_DEVNET_RPC || "https://devnet.rialo.io:4101";
 const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "AqSikYubk5DEygNhAZh1rSuVvrtNyHTUveLrze1QHn3R";
 const client: RialoClient = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
 
-// ─── Deployer keypair ─────────────────────────────────────────────────────────
+// ─── Deployer keypair (optional) ──────────────────────────────────────────────
 let deployerKeypair: Keypair | null = null;
 const secretHex = process.env.RIALO_DEPLOYER_SECRET_HEX;
 if (secretHex) {
   const secretBytes = Buffer.from(secretHex, "hex");
   deployerKeypair = Keypair.fromSecretKey(new Uint8Array(secretBytes));
-  console.log("[deployer] pubkey:", deployerKeypair.publicKey.toBase58());
+  console.log("[deployer] pubkey:", deployerKeypair.publicKey.toString());
 }
 
 // ─── Token registry (persisted) ───────────────────────────────────────────────
@@ -49,15 +49,14 @@ interface TokenRecord {
   imageUrl: string;
   creator: string;
   createdAt: number;
-  // Canonical state comes from chain; these are cached/fallback values
   tokenSupply: number;
   totalSupply: number;
   graduated: boolean;
   trades: TradeRecord[];
   marketCap: number;
-  // Onchain: true means CreateToken was submitted onchain
+  tokenTaxBps: number;    // creator-set tax in basis points (0–1000)
+  creatorEarnings: number; // unclaimed creator earnings in kelvin
   onchain: boolean;
-  // token_id bytes as hex (16 chars = 16 ascii bytes)
   tokenIdHex: string;
 }
 
@@ -97,16 +96,22 @@ function calcBuyTokens(rloIn: number, virtualRlo: number, virtualTokens: number)
   const k = virtualRlo * virtualTokens;
   const newVirtualRlo = virtualRlo + rloIn;
   const newVirtualTokens = k / newVirtualRlo;
-  const tokensOut = virtualTokens - newVirtualTokens;
-  return { tokensOut: Math.floor(tokensOut), newVirtualRlo, newVirtualTokens };
+  return {
+    tokensOut: Math.floor(virtualTokens - newVirtualTokens),
+    newVirtualRlo,
+    newVirtualTokens,
+  };
 }
 
 function calcSellRlo(tokensIn: number, virtualRlo: number, virtualTokens: number) {
   const k = virtualRlo * virtualTokens;
   const newVirtualTokens = virtualTokens + tokensIn;
   const newVirtualRlo = k / newVirtualTokens;
-  const rloOut = virtualRlo - newVirtualRlo;
-  return { rloOut: Math.floor(rloOut), newVirtualRlo, newVirtualTokens };
+  return {
+    rloOut: Math.floor(virtualRlo - newVirtualRlo),
+    newVirtualRlo,
+    newVirtualTokens,
+  };
 }
 
 function buildVirtualState(t: TokenRecord) {
@@ -114,7 +119,7 @@ function buildVirtualState(t: TokenRecord) {
   let vTokens = INITIAL_VIRTUAL_TOKENS;
   for (const trade of t.trades) {
     if (trade.type === "buy") {
-      const fee = Math.floor(trade.rloAmount * PLATFORM_FEE_BPS / 10000);
+      const fee = Math.floor(trade.rloAmount * PLATFORM_FEE_BPS / 10_000);
       const r = calcBuyTokens(trade.rloAmount - fee, vRlo, vTokens);
       vRlo = r.newVirtualRlo; vTokens = r.newVirtualTokens;
     } else {
@@ -125,7 +130,7 @@ function buildVirtualState(t: TokenRecord) {
   return { virtualRlo: vRlo, virtualTokens: vTokens, currentPrice: vRlo / vTokens };
 }
 
-// ─── Fetch live onchain state and merge into token record ────────────────────
+// ─── Sync onchain state into token record ─────────────────────────────────────
 async function syncOnchainState(t: TokenRecord): Promise<void> {
   if (!t.onchain) return;
   try {
@@ -133,18 +138,21 @@ async function syncOnchainState(t: TokenRecord): Promise<void> {
     const { pda } = deriveTokenStatePda(tokenIdBytes, PublicKey.fromString(PROGRAM_ID_STR));
     const info = await client.getAccountInfo(pda);
     if (!info?.data) return;
-    // RPC returns data as [base64String, "base64"] tuple
-    const raw = Array.isArray(info.data) ? (info.data as [string, string])[0] : info.data as string;
+    const raw = Array.isArray(info.data)
+      ? (info.data as [string, string])[0]
+      : (info.data as string);
     const data = info.data instanceof Uint8Array
       ? info.data
       : new Uint8Array(Buffer.from(raw, "base64"));
     const state = deserializeTokenState(data);
-    t.tokenSupply = Number(state.tokenSupply);
-    t.graduated = state.graduated;
-    const vRlo = Number(state.virtualRlo);
+    t.tokenSupply     = Number(state.tokenSupply);
+    t.graduated       = state.graduated;
+    t.tokenTaxBps     = Number(state.tokenTaxBps);
+    t.creatorEarnings = Number(state.creatorEarnings);
+    const vRlo    = Number(state.virtualRlo);
     const vTokens = Number(state.virtualTokens);
-    const price = vTokens > 0 ? vRlo / vTokens : 0;
-    t.marketCap = Math.round(price * t.tokenSupply);
+    const price   = vTokens > 0 ? vRlo / vTokens : 0;
+    t.marketCap   = Math.round(price * t.tokenSupply);
   } catch {
     // keep cached values if chain read fails
   }
@@ -163,7 +171,7 @@ app.get("/health", (_req, res) => {
 
 app.get("/deployer", (_req, res) => {
   if (!deployerKeypair) return res.status(503).json({ error: "No deployer key" });
-  res.json({ pubkey: deployerKeypair.publicKey.toBase58() });
+  res.json({ pubkey: deployerKeypair.publicKey.toString() });
 });
 
 app.get("/chain", async (_req, res) => {
@@ -178,12 +186,15 @@ app.get("/chain", async (_req, res) => {
   }
 });
 
+// Airdrop — max 1 RLO per call, so accept `calls` to do multiple
 app.post("/airdrop", async (req, res) => {
   try {
     const { pubkey, amount } = req.body as { pubkey?: string; amount?: number };
     if (!pubkey) return res.status(400).json({ error: "pubkey required" });
     const pk = PublicKey.fromString(pubkey);
-    const kelvin = BigInt(Math.round((amount || 1) * KELVIN_PER_RLO));
+    // Clamp to 1 RLO max per call
+    const rlo = Math.min(amount || 1, 1);
+    const kelvin = BigInt(Math.round(rlo * KELVIN_PER_RLO));
     const confirmed = await client.requestAirdropAndConfirm(pk, kelvin);
     res.json({ success: true, signature: confirmed.signature });
   } catch (e: unknown) {
@@ -201,12 +212,10 @@ app.get("/balance/:pubkey", async (req, res) => {
   }
 });
 
-// List tokens — sync onchain state in background
+// List tokens
 app.get("/tokens", async (_req, res) => {
   const list = Array.from(tokens.values());
-  // Sync onchain states in parallel (best-effort, don't block response)
   await Promise.allSettled(list.map((t) => syncOnchainState(t)));
-
   const result = list
     .sort((a, b) => b.marketCap - a.marketCap)
     .map((t) => {
@@ -226,6 +235,8 @@ app.get("/tokens", async (_req, res) => {
         currentPrice,
         marketCap: t.marketCap,
         progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
+        tokenTaxBps: t.tokenTaxBps || 0,
+        creatorEarnings: t.creatorEarnings || 0,
         onchain: t.onchain,
       };
     });
@@ -238,49 +249,55 @@ app.get("/tokens/:id", async (req, res) => {
   await syncOnchainState(t);
   const state = buildVirtualState(t);
   res.json({
-    ...t,
-    trades: undefined,
+    id: t.id,
+    name: t.name,
+    symbol: t.symbol,
+    description: t.description,
+    imageUrl: t.imageUrl,
+    creator: t.creator,
+    createdAt: t.createdAt,
+    tokenSupply: t.tokenSupply,
+    totalSupply: t.totalSupply,
+    graduated: t.graduated,
+    tradeCount: t.trades.length,
     currentPrice: state.currentPrice,
     marketCap: t.marketCap,
     progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
     virtualRlo: state.virtualRlo,
-    tradeCount: t.trades.length,
+    tokenTaxBps: t.tokenTaxBps || 0,
+    creatorEarnings: t.creatorEarnings || 0,
     onchain: t.onchain,
   });
 });
 
-// Create token — accepts a signed transaction from the browser
+// Create token
 app.post("/tokens", async (req, res) => {
   try {
-    const { name, symbol, description, imageUrl, creator, signedTxBase64, tokenIdHex } = req.body as {
-      name?: string;
-      symbol?: string;
-      description?: string;
-      imageUrl?: string;
-      creator?: string;
-      signedTxBase64?: string;
-      tokenIdHex?: string;
+    const {
+      name, symbol, description, imageUrl, creator,
+      signedTxBase64, tokenIdHex, tokenTaxBps,
+    } = req.body as {
+      name?: string; symbol?: string; description?: string; imageUrl?: string;
+      creator?: string; signedTxBase64?: string; tokenIdHex?: string; tokenTaxBps?: number;
     };
-
     if (!name || !symbol || !creator) {
       return res.status(400).json({ error: "name, symbol, creator required" });
     }
     if (symbol.length > 10) return res.status(400).json({ error: "symbol max 10 chars" });
-    if (name.length > 32) return res.status(400).json({ error: "name max 32 chars" });
+    if (name.length > 32)   return res.status(400).json({ error: "name max 32 chars" });
+    const taxBps = Math.min(Math.max(tokenTaxBps ?? 0, 0), 1000);
 
     let pk: PublicKey;
     try { pk = PublicKey.fromString(creator); } catch {
       return res.status(400).json({ error: "Invalid creator pubkey" });
     }
 
-    // Check balance
     const balance = await client.getBalance(pk);
     const minRequired = BigInt(Math.round(0.05 * KELVIN_PER_RLO));
     if (balance < minRequired) {
-      return res.status(400).json({ error: "Insufficient balance. Need at least 0.05 RLO. Use /airdrop to get test RLO." });
+      return res.status(400).json({ error: "Insufficient balance — need at least 0.05 RLO." });
     }
 
-    // Broadcast the signed CreateToken tx
     let txHash = "";
     let onchain = false;
     const idHex = tokenIdHex || uuidv4().replace(/-/g, "").slice(0, 16);
@@ -293,8 +310,9 @@ app.post("/tokens", async (req, res) => {
         onchain = true;
         console.log("[create] onchain tx:", txHash);
       } catch (e: unknown) {
-        console.warn("[create] tx failed:", e instanceof Error ? e.message : String(e));
-        return res.status(400).json({ error: `Onchain transaction failed: ${e instanceof Error ? e.message : String(e)}` });
+        return res.status(400).json({
+          error: `Onchain transaction failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
       }
     }
 
@@ -311,45 +329,70 @@ app.post("/tokens", async (req, res) => {
       graduated: false,
       trades: [],
       marketCap: 0,
+      tokenTaxBps: taxBps,
+      creatorEarnings: 0,
       onchain,
       tokenIdHex: idHex,
     };
 
     tokens.set(idHex, token);
     saveTokens(tokens);
-    res.json({ success: true, token: { ...token, txHash }, trades: undefined });
+    res.json({ success: true, token: { ...token, txHash, trades: undefined } });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
-// Quote endpoints (pure math, no chain read needed)
+// ─── Quote buy ────────────────────────────────────────────────────────────────
 app.post("/tokens/:id/quote-buy", (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
   if (t.graduated) return res.status(400).json({ error: "Token graduated" });
   const { rloAmount } = req.body as { rloAmount?: number };
   if (!rloAmount || rloAmount <= 0) return res.status(400).json({ error: "rloAmount required (kelvin)" });
+
   const state = buildVirtualState(t);
-  const fee = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10000);
-  const { tokensOut } = calcBuyTokens(rloAmount - fee, state.virtualRlo, state.virtualTokens);
+  const taxBps = t.tokenTaxBps || 0;
+  const platformFee = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10_000);
+  const creatorTax  = Math.floor(rloAmount * taxBps / 10_000);
+  const rloAfter    = rloAmount - platformFee - creatorTax;
+
+  const { tokensOut } = calcBuyTokens(rloAfter, state.virtualRlo, state.virtualTokens);
   const limited = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
-  res.json({ tokensOut: limited, fee, price: rloAmount / Math.max(limited, 1), currentPrice: state.currentPrice });
+  res.json({
+    tokensOut: limited,
+    fee: platformFee,
+    creatorTax,
+    price: rloAmount / Math.max(limited, 1),
+    currentPrice: state.currentPrice,
+  });
 });
 
+// ─── Quote sell ───────────────────────────────────────────────────────────────
 app.post("/tokens/:id/quote-sell", (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
   if (t.graduated) return res.status(400).json({ error: "Token graduated" });
   const { tokenAmount } = req.body as { tokenAmount?: number };
   if (!tokenAmount || tokenAmount <= 0) return res.status(400).json({ error: "tokenAmount required" });
+
   const state = buildVirtualState(t);
-  const { rloOut } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
-  const fee = Math.floor(rloOut * PLATFORM_FEE_BPS / 10000);
-  res.json({ rloOut: rloOut - fee, fee, price: (rloOut - fee) / Math.max(tokenAmount, 1), currentPrice: state.currentPrice });
+  const taxBps = t.tokenTaxBps || 0;
+  const { rloOut: rloGross } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
+  const platformFee = Math.floor(rloGross * PLATFORM_FEE_BPS / 10_000);
+  const creatorTax  = Math.floor(rloGross * taxBps / 10_000);
+  const rloAfterFee = rloGross - platformFee - creatorTax;
+
+  res.json({
+    rloOut: rloAfterFee,
+    fee: platformFee,
+    creatorTax,
+    price: rloAfterFee / Math.max(tokenAmount, 1),
+    currentPrice: state.currentPrice,
+  });
 });
 
-// Execute buy — receives signed tx from browser, broadcasts, records
+// ─── Execute buy ──────────────────────────────────────────────────────────────
 app.post("/tokens/:id/buy", async (req, res) => {
   try {
     const t = tokens.get(req.params.id);
@@ -357,13 +400,10 @@ app.post("/tokens/:id/buy", async (req, res) => {
     if (t.graduated) return res.status(400).json({ error: "Token graduated" });
 
     const { trader, rloAmount, signedTxBase64 } = req.body as {
-      trader?: string;
-      rloAmount?: number;
-      signedTxBase64?: string;
+      trader?: string; rloAmount?: number; signedTxBase64?: string;
     };
     if (!trader || !rloAmount) return res.status(400).json({ error: "trader and rloAmount required" });
 
-    // Broadcast signed tx (required for real onchain trades)
     let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 16);
     let onchain = false;
 
@@ -377,7 +417,6 @@ app.post("/tokens/:id/buy", async (req, res) => {
         return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
       }
     } else {
-      // No signed tx: verify balance at minimum
       const pk = PublicKey.fromString(trader);
       const balance = await client.getBalance(pk);
       if (Number(balance) < rloAmount) {
@@ -385,11 +424,12 @@ app.post("/tokens/:id/buy", async (req, res) => {
       }
     }
 
-    // Sync from chain if onchain, else use local math
     if (onchain) await syncOnchainState(t);
-    const state = buildVirtualState(t);
-    const fee = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10000);
-    const { tokensOut } = calcBuyTokens(rloAmount - fee, state.virtualRlo, state.virtualTokens);
+    const state    = buildVirtualState(t);
+    const taxBps   = t.tokenTaxBps || 0;
+    const fee      = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10_000);
+    const tax      = Math.floor(rloAmount * taxBps / 10_000);
+    const { tokensOut } = calcBuyTokens(rloAmount - fee - tax, state.virtualRlo, state.virtualTokens);
     const limitedTokens = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
     if (limitedTokens <= 0) return res.status(400).json({ error: "No tokens available" });
 
@@ -407,7 +447,6 @@ app.post("/tokens/:id/buy", async (req, res) => {
 
     t.trades.push(trade);
     if (!onchain) {
-      // Update local state only for sim trades
       t.tokenSupply += limitedTokens;
       if (t.tokenSupply >= GRADUATION_SUPPLY) t.graduated = true;
     }
@@ -417,10 +456,8 @@ app.post("/tokens/:id/buy", async (req, res) => {
     saveTokens(tokens);
 
     res.json({
-      success: true,
-      trade,
-      tokenSupply: t.tokenSupply,
-      graduated: t.graduated,
+      success: true, trade,
+      tokenSupply: t.tokenSupply, graduated: t.graduated,
       currentPrice: newState.currentPrice,
       progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
     });
@@ -429,7 +466,7 @@ app.post("/tokens/:id/buy", async (req, res) => {
   }
 });
 
-// Execute sell
+// ─── Execute sell ─────────────────────────────────────────────────────────────
 app.post("/tokens/:id/sell", async (req, res) => {
   try {
     const t = tokens.get(req.params.id);
@@ -437,9 +474,7 @@ app.post("/tokens/:id/sell", async (req, res) => {
     if (t.graduated) return res.status(400).json({ error: "Token graduated" });
 
     const { trader, tokenAmount, signedTxBase64 } = req.body as {
-      trader?: string;
-      tokenAmount?: number;
-      signedTxBase64?: string;
+      trader?: string; tokenAmount?: number; signedTxBase64?: string;
     };
     if (!trader || !tokenAmount) return res.status(400).json({ error: "trader and tokenAmount required" });
 
@@ -456,7 +491,6 @@ app.post("/tokens/:id/sell", async (req, res) => {
         return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
       }
     } else {
-      // sim: check local balance
       const traderBal =
         t.trades.filter((tr) => tr.trader === trader && tr.type === "buy").reduce((s, tr) => s + tr.tokenAmount, 0) -
         t.trades.filter((tr) => tr.trader === trader && tr.type === "sell").reduce((s, tr) => s + tr.tokenAmount, 0);
@@ -466,10 +500,12 @@ app.post("/tokens/:id/sell", async (req, res) => {
     }
 
     if (onchain) await syncOnchainState(t);
-    const state = buildVirtualState(t);
-    const { rloOut } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
-    const fee = Math.floor(rloOut * PLATFORM_FEE_BPS / 10000);
-    const rloAfterFee = rloOut - fee;
+    const state       = buildVirtualState(t);
+    const taxBps      = t.tokenTaxBps || 0;
+    const { rloOut: rloGross } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
+    const fee         = Math.floor(rloGross * PLATFORM_FEE_BPS / 10_000);
+    const tax         = Math.floor(rloGross * taxBps / 10_000);
+    const rloAfterFee = rloGross - fee - tax;
     if (rloAfterFee <= 0) return res.status(400).json({ error: "Nothing to receive" });
 
     const trade: TradeRecord = {
@@ -485,19 +521,15 @@ app.post("/tokens/:id/sell", async (req, res) => {
     };
 
     t.trades.push(trade);
-    if (!onchain) {
-      t.tokenSupply -= tokenAmount;
-    }
+    if (!onchain) t.tokenSupply -= tokenAmount;
     const newState = buildVirtualState(t);
     t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
     tokens.set(t.id, t);
     saveTokens(tokens);
 
     res.json({
-      success: true,
-      trade,
-      tokenSupply: t.tokenSupply,
-      currentPrice: newState.currentPrice,
+      success: true, trade,
+      tokenSupply: t.tokenSupply, currentPrice: newState.currentPrice,
       progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
     });
   } catch (e: unknown) {
@@ -505,6 +537,48 @@ app.post("/tokens/:id/sell", async (req, res) => {
   }
 });
 
+// ─── Claim creator earnings ───────────────────────────────────────────────────
+app.post("/tokens/:id/claim-earnings", async (req, res) => {
+  try {
+    const t = tokens.get(req.params.id);
+    if (!t) return res.status(404).json({ error: "Token not found" });
+    const { signedTxBase64 } = req.body as { signedTxBase64?: string };
+    if (!signedTxBase64) return res.status(400).json({ error: "signedTxBase64 required" });
+
+    const txBytes = Buffer.from(signedTxBase64, "base64");
+    const confirmed = await client.sendAndConfirmTransaction(txBytes);
+    // Sync state from chain after claim
+    await syncOnchainState(t);
+    saveTokens(tokens);
+    res.json({ success: true, signature: confirmed.signature });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ─── Update token tax ─────────────────────────────────────────────────────────
+app.post("/tokens/:id/update-tax", async (req, res) => {
+  try {
+    const t = tokens.get(req.params.id);
+    if (!t) return res.status(404).json({ error: "Token not found" });
+    const { signedTxBase64, newTaxBps } = req.body as { signedTxBase64?: string; newTaxBps?: number };
+    if (!signedTxBase64) return res.status(400).json({ error: "signedTxBase64 required" });
+    if (newTaxBps === undefined) return res.status(400).json({ error: "newTaxBps required" });
+    if (newTaxBps < 0 || newTaxBps > 1000) return res.status(400).json({ error: "newTaxBps must be 0–1000" });
+
+    const txBytes = Buffer.from(signedTxBase64, "base64");
+    const confirmed = await client.sendAndConfirmTransaction(txBytes);
+    // Optimistically update local cache, then sync from chain
+    t.tokenTaxBps = newTaxBps;
+    await syncOnchainState(t);
+    saveTokens(tokens);
+    res.json({ success: true, signature: confirmed.signature });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// ─── Trades + Portfolio + Wallet ──────────────────────────────────────────────
 app.get("/tokens/:id/trades", (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
@@ -516,12 +590,12 @@ app.get("/portfolio/:pubkey", (req, res) => {
   const holdings: Array<{ token: Omit<TokenRecord, "trades">; balance: number; value: number; pnl: number }> = [];
   for (const t of tokens.values()) {
     const bought = t.trades.filter((tr) => tr.trader === pubkey && tr.type === "buy");
-    const sold = t.trades.filter((tr) => tr.trader === pubkey && tr.type === "sell");
+    const sold   = t.trades.filter((tr) => tr.trader === pubkey && tr.type === "sell");
     const tokenBal = bought.reduce((s, tr) => s + tr.tokenAmount, 0) - sold.reduce((s, tr) => s + tr.tokenAmount, 0);
     if (tokenBal > 0) {
       const state = buildVirtualState(t);
       const value = Math.round(state.currentPrice * tokenBal);
-      const spent = bought.reduce((s, tr) => s + tr.rloAmount, 0);
+      const spent    = bought.reduce((s, tr) => s + tr.rloAmount, 0);
       const received = sold.reduce((s, tr) => s + tr.rloAmount, 0);
       const { trades: _trades, ...tokenWithoutTrades } = t;
       void _trades;

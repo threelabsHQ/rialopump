@@ -4,6 +4,7 @@ import type { Token, TradeRecord, WalletState } from "../types";
 import { TradePanel } from "../components/TradePanel";
 import { BondingChart } from "../components/BondingChart";
 import { TradesTable } from "../components/TradesTable";
+import { CreatorPanel } from "../components/CreatorPanel";
 import { TokenAvatar } from "../components/ui/TokenAvatar";
 import { GlassCard } from "../components/ui/GlassCard";
 import { ProgressBar } from "../components/ui/ProgressBar";
@@ -104,6 +105,9 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
         <div className="space-y-4">
           <BondingChart token={token} trades={trades} />
           <TradePanel token={token} wallet={wallet} onTrade={() => { void load(); }} />
+          {wallet && wallet.pubkey === token.creator && (
+            <CreatorPanel token={token} wallet={wallet} onRefresh={() => { void load(); }} />
+          )}
           <TokenInfo token={token} trades={trades} />
           <TradesTable trades={trades} />
         </div>
@@ -117,6 +121,9 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
           </div>
           <div className="space-y-4">
             <TradePanel token={token} wallet={wallet} onTrade={() => { void load(); }} />
+            {wallet && wallet.pubkey === token.creator && (
+              <CreatorPanel token={token} wallet={wallet} onRefresh={() => { void load(); }} />
+            )}
           </div>
         </div>
       )}

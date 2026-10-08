@@ -4,7 +4,7 @@ import { TokenAvatar } from "./ui/TokenAvatar";
 import { api } from "../api";
 import type { WalletState } from "../types";
 import { toast } from "sonner";
-import { Loader2, Rocket, Upload, ExternalLink } from "lucide-react";
+import { Loader2, Rocket, Upload, ExternalLink, Percent } from "lucide-react";
 import { clsx } from "clsx";
 import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes } from "../rialo/chain";
 import { buildCreateTokenIx } from "../rialo/program";
@@ -22,13 +22,13 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
   const [symbol, setSymbol] = useState("");
   const [description, setDescription] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [tokenTaxBps, setTokenTaxBps] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
 
   const valid = name.trim().length > 0 && symbol.trim().length > 0;
 
-  // Generate a deterministic 16-char token ID from name+symbol
   function makeTokenId(n: string, s: string): string {
     const raw = (n + s + Date.now().toString()).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
     return raw.slice(0, 16).padEnd(16, "0");
@@ -39,6 +39,7 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
     if (!valid) { toast.error("Name and symbol are required"); return; }
     if (symbol.length > 10) { toast.error("Symbol max 10 characters"); return; }
     if (name.length > 32) { toast.error("Name max 32 characters"); return; }
+    const taxBps = Math.min(Math.max(Math.round(tokenTaxBps), 0), 1000);
 
     setLoading(true);
     setError(null);
@@ -49,23 +50,24 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
       const tokenIdBytes = tokenIdToBytes(tokenIdHex);
       const keypair = keypairFromHex(wallet.secretHex);
 
-      // Build and sign the CreateToken instruction
       const ix = buildCreateTokenIx({
         tokenId: tokenIdBytes,
         name: name.trim(),
         symbol: symbol.trim().toUpperCase(),
         description: description.trim(),
+        imageUrl: imageUrl.trim(),
+        tokenTaxBps: BigInt(taxBps),
         creator: keypair.publicKey,
       });
       const signedTxBase64 = await buildSignedTxBytes([ix], keypair);
 
-      // Send to server (which broadcasts and records)
       const result = await api.createToken({
         name: name.trim(),
         symbol: symbol.trim().toUpperCase(),
         description: description.trim(),
         imageUrl: imageUrl.trim(),
         creator: wallet.pubkey,
+        tokenTaxBps: taxBps,
         signedTxBase64,
         tokenIdHex,
       });
@@ -96,9 +98,11 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
                 {name || "Token Name"}
               </p>
               <p className="text-sm font-semibold" style={{ color: "var(--muted)" }}>${symbol || "SYMBOL"}</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--subtle)" }}>
-                {description || "Token description appears here"}
-              </p>
+              {tokenTaxBps > 0 && (
+                <p className="text-xs mt-0.5 font-medium" style={{ color: "var(--accent)" }}>
+                  {(tokenTaxBps / 100).toFixed(1)}% creator tax
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -173,25 +177,51 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
           </InnerField>
         </div>
 
+        {/* Creator tax */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium flex items-center gap-1" style={{ color: "var(--muted)" }}>
+            <Percent size={12} /> Creator Tax
+            <span style={{ color: "var(--subtle)" }}>(0–10%, default 0)</span>
+          </label>
+          <InnerField className="flex items-center gap-3 px-4 py-3">
+            <input
+              type="range"
+              min={0}
+              max={1000}
+              step={50}
+              value={tokenTaxBps}
+              onChange={(e) => setTokenTaxBps(Number(e.target.value))}
+              className="flex-1 accent-accent"
+            />
+            <span className="text-sm font-bold tabular-nums w-12 text-right" style={{ color: "var(--ink)" }}>
+              {(tokenTaxBps / 100).toFixed(1)}%
+            </span>
+          </InnerField>
+          <p className="text-xs" style={{ color: "var(--subtle)" }}>
+            You earn this % of every buy and sell on your token. Claimable anytime via Creator Dashboard.
+          </p>
+        </div>
+
         {/* How it works */}
         <div className="rounded-xl p-3 space-y-1" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
           <p className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>How it works</p>
           <ul className="text-xs space-y-0.5" style={{ color: "var(--muted)" }}>
-            <li>• 1B total supply with bonding curve pricing</li>
+            <li>• 1B total supply with x·y=k bonding curve pricing</li>
             <li>• Graduates to full DEX at 800M tokens sold</li>
-            <li>• 1% platform fee on all trades</li>
+            <li>• 1% platform fee on all trades (goes to fee vault)</li>
+            {tokenTaxBps > 0 && (
+              <li>• {(tokenTaxBps / 100).toFixed(1)}% creator tax accrues to your Creator Dashboard</li>
+            )}
             <li>• State stored onchain — Rialo devnet program</li>
           </ul>
         </div>
 
-        {/* Error */}
         {error && (
           <div className="rounded-xl p-3 text-xs" style={{ background: "rgba(186,43,76,0.08)", color: "var(--danger)", border: "1px solid rgba(186,43,76,0.2)" }}>
             {error}
           </div>
         )}
 
-        {/* Success tx link */}
         {txHash && !txHash.startsWith("sim_") && (
           <a
             href={`${EXPLORER_BASE}/tx/${txHash}`}

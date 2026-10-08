@@ -15,6 +15,10 @@ export interface Token {
   progressPct: number;
   virtualRlo?: number;
   trades?: TradeRecord[];
+  // v2 fields
+  tokenTaxBps?: number;
+  creatorEarnings?: number; // kelvin
+  onchain?: boolean;
 }
 
 export interface TradeRecord {
@@ -26,6 +30,7 @@ export interface TradeRecord {
   price: number;
   timestamp: number;
   txHash: string;
+  onchain?: boolean;
 }
 
 export interface WalletState {
@@ -39,6 +44,7 @@ export interface QuoteResult {
   tokensOut?: number;
   rloOut?: number;
   fee: number;
+  creatorTax?: number;
   price: number;
   currentPrice: number;
 }

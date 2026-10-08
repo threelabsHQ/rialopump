@@ -51,17 +51,18 @@ export const api = {
     description: string;
     imageUrl: string;
     creator: string;
+    tokenTaxBps?: number;
     signedTxBase64?: string;
     tokenIdHex?: string;
   }) => req<{ success: boolean; token: Token }>("/tokens", { method: "POST", body: JSON.stringify(body) }),
 
   quoteBuy: (id: string, rloAmount: number) =>
-    req<QuoteResult>(`/tokens/${id}/quote-buy`, {
+    req<QuoteResult & { creatorTax?: number }>(`/tokens/${id}/quote-buy`, {
       method: "POST",
       body: JSON.stringify({ rloAmount }),
     }),
   quoteSell: (id: string, tokenAmount: number) =>
-    req<QuoteResult>(`/tokens/${id}/quote-sell`, {
+    req<QuoteResult & { creatorTax?: number }>(`/tokens/${id}/quote-sell`, {
       method: "POST",
       body: JSON.stringify({ tokenAmount }),
     }),
@@ -76,6 +77,17 @@ export const api = {
       body: JSON.stringify({ trader, tokenAmount, signedTxBase64 }),
     }),
   trades: (id: string) => req<TradeRecord[]>(`/tokens/${id}/trades`),
+
+  claimCreatorEarnings: (id: string, signedTxBase64: string) =>
+    req<{ success: boolean; signature: string }>(`/tokens/${id}/claim-earnings`, {
+      method: "POST",
+      body: JSON.stringify({ signedTxBase64 }),
+    }),
+  updateTokenTax: (id: string, signedTxBase64: string, newTaxBps: number) =>
+    req<{ success: boolean; signature: string }>(`/tokens/${id}/update-tax`, {
+      method: "POST",
+      body: JSON.stringify({ signedTxBase64, newTaxBps }),
+    }),
 
   balance: (pubkey: string) => req<{ kelvin: string; rlo: string }>(`/balance/${pubkey}`),
   airdrop: (pubkey: string, amount?: number) =>

@@ -1,13 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { GlassCard, InnerField } from "./ui/GlassCard";
 import { api } from "../api";
-import type { Token, WalletState, QuoteResult } from "../types";
+import type { Token, WalletState } from "../types";
 import { formatRlo } from "../utils/crypto";
 import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
+
 import { clsx } from "clsx";
 import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes } from "../rialo/chain";
 import { buildBuyIx, buildSellIx } from "../rialo/program";
+
+interface QuoteResult {
+  tokensOut?: number;
+  rloOut?: number;
+  fee: number;
+  creatorTax?: number;
+  price: number;
+  currentPrice: number;
+}
 
 interface TradePanelProps {
   token: Token;
@@ -67,7 +77,9 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
 
       if (tab === "buy") {
         const kelvin = BigInt(Math.round(parseFloat(amount) * KELVIN));
-        const ix = buildBuyIx({ tokenId: tokenIdBytes, buyer: keypair.publicKey, rloAmount: kelvin });
+        // 5% slippage tolerance on minimum tokens out
+        const minTokensOut = quote?.tokensOut ? BigInt(Math.floor(quote.tokensOut * 0.95)) : 0n;
+        const ix = buildBuyIx({ tokenId: tokenIdBytes, buyer: keypair.publicKey, rloAmount: kelvin, minTokensOut });
         signedTxBase64 = await buildSignedTxBytes([ix], keypair);
 
         setTxState("confirming");
@@ -76,7 +88,9 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
         setTxHash(result.trade.txHash);
       } else {
         const tokenAmt = BigInt(Math.round(parseFloat(amount)));
-        const ix = buildSellIx({ tokenId: tokenIdBytes, seller: keypair.publicKey, tokenAmount: tokenAmt });
+        // 5% slippage tolerance on minimum RLO out
+        const minRloOut = quote?.rloOut ? BigInt(Math.floor(quote.rloOut * 0.95)) : 0n;
+        const ix = buildSellIx({ tokenId: tokenIdBytes, seller: keypair.publicKey, tokenAmount: tokenAmt, minRloOut });
         signedTxBase64 = await buildSignedTxBytes([ix], keypair);
 
         setTxState("confirming");
@@ -166,6 +180,16 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
             <span style={{ color: "var(--muted)" }}>Platform fee (1%)</span>
             <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>{formatRlo(quote.fee)} RLO</span>
           </div>
+          {(quote.creatorTax ?? 0) > 0 && (
+            <div className="flex justify-between text-xs">
+              <span style={{ color: "var(--muted)" }}>
+                Creator tax ({((token.tokenTaxBps ?? 0) / 100).toFixed(1)}%)
+              </span>
+              <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>
+                {formatRlo(quote.creatorTax ?? 0)} RLO
+              </span>
+            </div>
+          )}
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>Price per token</span>
             <span className="font-medium tabular-nums" style={{ color: "var(--ink)" }}>

@@ -94,6 +94,10 @@ export class BorshWriter {
 
 // ─── Token state ──────────────────────────────────────────────────────────────
 
+// Field order mirrors Rust BorshSerialize for TokenState v2 (state.rs):
+//   version, creator, virtual_rlo, virtual_tokens, token_supply,
+//   fees_collected, creator_earnings, graduated, token_tax_bps,
+//   name, symbol, description, image_url
 export interface ServerTokenState {
   version: number;
   creator: string; // base58
@@ -101,26 +105,32 @@ export interface ServerTokenState {
   virtualTokens: bigint;
   tokenSupply: bigint;
   feesCollected: bigint;
+  creatorEarnings: bigint;
   graduated: boolean;
+  tokenTaxBps: bigint;
   name: string;
   symbol: string;
   description: string;
+  imageUrl: string;
 }
 
 export function deserializeTokenState(data: Uint8Array): ServerTokenState {
   const r = new BorshReader(data);
-  const version = r.readU8();
-  const creatorBytes = r.readFixedBytes(32);
-  const creator = PublicKey.fromBytes(creatorBytes).toString();
-  const virtualRlo = r.readU64LE();
-  const virtualTokens = r.readU64LE();
-  const tokenSupply = r.readU64LE();
-  const feesCollected = r.readU64LE();
-  const graduated = r.readBool();
-  const name = r.readString();
-  const symbol = r.readString();
-  const description = r.readString();
-  return { version, creator, virtualRlo, virtualTokens, tokenSupply, feesCollected, graduated, name, symbol, description };
+  return {
+    version:         r.readU8(),
+    creator:         PublicKey.fromBytes(r.readFixedBytes(32)).toString(),
+    virtualRlo:      r.readU64LE(),
+    virtualTokens:   r.readU64LE(),
+    tokenSupply:     r.readU64LE(),
+    feesCollected:   r.readU64LE(),
+    creatorEarnings: r.readU64LE(),
+    graduated:       r.readBool(),
+    tokenTaxBps:     r.readU64LE(),
+    name:            r.readString(),
+    symbol:          r.readString(),
+    description:     r.readString(),
+    imageUrl:        r.readString(),
+  };
 }
 
 // ─── PDA derivation ───────────────────────────────────────────────────────────
