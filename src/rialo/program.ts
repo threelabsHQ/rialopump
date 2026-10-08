@@ -26,7 +26,7 @@ import type { Transaction } from "@rialo/ts-cdk";
 
 export const PROGRAM_ID_STR: string =
   (import.meta.env as Record<string, string | undefined>).VITE_PROGRAM_ID
-  ?? "AqSikYubk5DEygNhAZh1rSuVvrtNyHTUveLrze1QHn3R";
+  ?? "CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk";
 
 export const PROGRAM_ID = PublicKey.fromString(PROGRAM_ID_STR);
 export const SYSTEM_PK  = PublicKey.fromString(SYSTEM_PROGRAM_ID);

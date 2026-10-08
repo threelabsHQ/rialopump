@@ -14,7 +14,7 @@ app.use(express.json({ limit: "2mb" }));
 
 // ─── Rialo client ─────────────────────────────────────────────────────────────
 const RPC_URL = process.env.RIALO_DEVNET_RPC || "https://devnet.rialo.io:4101";
-const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "AqSikYubk5DEygNhAZh1rSuVvrtNyHTUveLrze1QHn3R";
+const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk";
 const client: RialoClient = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
 
 // ─── Deployer keypair (optional) ──────────────────────────────────────────────
