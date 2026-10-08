@@ -17,6 +17,53 @@ const RPC_URL = process.env.RIALO_DEVNET_RPC || "https://devnet.rialo.io:4101";
 const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk";
 const client: RialoClient = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
 
+/**
+ * Poll until a transaction signature is confirmed or timeout.
+ * Devnet can be slow; the SDK's built-in confirmTransaction times out on ~1/3
+ * of requests. We poll getSignatureStatuses with a 2s interval instead.
+ */
+async function pollConfirm(signature: string, maxMs = 60_000): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const statuses = await client.getSignatureStatuses([signature]);
+    const s = statuses?.[0];
+    if (s && !s.err) return;
+    if (s?.err) throw new Error(`Transaction failed: ${JSON.stringify(s.err)}`);
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  // Best-effort: if we timed out but had no error, assume it landed
+  console.warn("[pollConfirm] timeout for", signature, "— assuming landed");
+}
+
+/**
+ * Send a raw signed transaction and wait for it to land.
+ * Falls back to polling when sendAndConfirmTransaction times out.
+ */
+async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
+  try {
+    const confirmed = await client.sendAndConfirmTransaction(txBytes);
+    return confirmed.signature;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("timed out") || msg.includes("TRANSACTION_CONFIRMATION_TIMEOUT")) {
+      // Re-send and poll manually
+      const sig = await client.sendTransaction(txBytes);
+      await pollConfirm(sig);
+      return sig;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Airdrop and confirm with manual polling (requestAirdropAndConfirm times out on devnet).
+ */
+async function airdropAndConfirm(pk: PublicKey, kelvin: bigint): Promise<string> {
+  const sig = await client.requestAirdrop(pk, kelvin);
+  await pollConfirm(sig);
+  return sig;
+}
+
 // ─── Deployer keypair (optional) ──────────────────────────────────────────────
 let deployerKeypair: Keypair | null = null;
 const secretHex = process.env.RIALO_DEPLOYER_SECRET_HEX;
@@ -230,8 +277,8 @@ app.post("/rpc/send-tx", async (req, res) => {
     const { txBase64 } = req.body as { txBase64?: string };
     if (!txBase64) return res.status(400).json({ error: "txBase64 required" });
     const txBytes = new Uint8Array(Buffer.from(txBase64, "base64"));
-    const confirmed = await client.sendAndConfirmTransaction(txBytes);
-    res.json({ signature: confirmed.signature });
+    const sig = await sendAndConfirm(txBytes);
+    res.json({ signature: sig });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
@@ -246,8 +293,8 @@ app.post("/airdrop", async (req, res) => {
     // Clamp to 1 RLO max per call
     const rlo = Math.min(amount || 1, 1);
     const kelvin = BigInt(Math.round(rlo * KELVIN_PER_RLO));
-    const confirmed = await client.requestAirdropAndConfirm(pk, kelvin);
-    res.json({ success: true, signature: confirmed.signature });
+    const sig = await airdropAndConfirm(pk, kelvin);
+    res.json({ success: true, signature: sig });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
@@ -377,8 +424,7 @@ app.post("/tokens", async (req, res) => {
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
-        const confirmed = await client.sendAndConfirmTransaction(txBytes);
-        txHash = confirmed.signature;
+        txHash = await sendAndConfirm(txBytes);
         onchain = true;
         console.log("[create] onchain tx:", txHash);
       } catch (e: unknown) {
@@ -484,8 +530,7 @@ app.post("/tokens/:id/buy", async (req, res) => {
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
-        const confirmed = await client.sendAndConfirmTransaction(txBytes);
-        txHash = confirmed.signature;
+        txHash = await sendAndConfirm(txBytes);
         onchain = true;
       } catch (e: unknown) {
         return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
@@ -560,8 +605,7 @@ app.post("/tokens/:id/sell", async (req, res) => {
     if (signedTxBase64) {
       try {
         const txBytes = Buffer.from(signedTxBase64, "base64");
-        const confirmed = await client.sendAndConfirmTransaction(txBytes);
-        txHash = confirmed.signature;
+        txHash = await sendAndConfirm(txBytes);
         onchain = true;
       } catch (e: unknown) {
         return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
@@ -625,11 +669,11 @@ app.post("/tokens/:id/claim-earnings", async (req, res) => {
     if (!signedTxBase64) return res.status(400).json({ error: "signedTxBase64 required" });
 
     const txBytes = Buffer.from(signedTxBase64, "base64");
-    const confirmed = await client.sendAndConfirmTransaction(txBytes);
+    const sig = await sendAndConfirm(txBytes);
     // Sync state from chain after claim
     await syncOnchainState(t);
     saveTokens(tokens);
-    res.json({ success: true, signature: confirmed.signature });
+    res.json({ success: true, signature: sig });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
@@ -646,12 +690,12 @@ app.post("/tokens/:id/update-tax", async (req, res) => {
     if (newTaxBps < 0 || newTaxBps > 1000) return res.status(400).json({ error: "newTaxBps must be 0–1000" });
 
     const txBytes = Buffer.from(signedTxBase64, "base64");
-    const confirmed = await client.sendAndConfirmTransaction(txBytes);
+    const sig = await sendAndConfirm(txBytes);
     // Optimistically update local cache, then sync from chain
     t.tokenTaxBps = newTaxBps;
     await syncOnchainState(t);
     saveTokens(tokens);
-    res.json({ success: true, signature: confirmed.signature });
+    res.json({ success: true, signature: sig });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
