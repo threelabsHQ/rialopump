@@ -93,7 +93,7 @@ export const api = {
   airdrop: (pubkey: string, amount?: number) =>
     req<{ success: boolean; signature: string }>("/airdrop", {
       method: "POST",
-      body: JSON.stringify({ pubkey, amount: amount ?? 100 }),
+      body: JSON.stringify({ pubkey, amount: amount ?? 1 }),
     }),
   portfolio: (pubkey: string) => req<PortfolioHolding[]>(`/portfolio/${pubkey}`),
   generateWallet: () => req<{ secretHex: string; note: string }>("/wallet/generate", { method: "POST" }),

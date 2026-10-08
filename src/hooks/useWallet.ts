@@ -121,7 +121,10 @@ export function useWallet() {
     setLoading(true);
     setError(null);
     try {
-      await api.airdrop(wallet.pubkey, 100);
+      // Max 1 RLO per call — drip 3 times
+      for (let i = 0; i < 3; i++) {
+        await api.airdrop(wallet.pubkey, 1);
+      }
       await refreshWalletBalance();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
