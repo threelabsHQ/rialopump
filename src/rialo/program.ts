@@ -1,36 +1,52 @@
 /**
- * Rialo Launchpad program interface — browser-compatible.
- * State version 2: adds creatorEarnings, tokenTaxBps, imageUrl.
- * Instruction encoders match the Rust borsh enum variant index exactly.
+ * Rialo Launchpad — browser-side program interface.
+ *
+ * State version 3 layout (must match program/src/state.rs BorshSerialize order):
+ *   version (u8), creator (32 bytes), virtual_rlo (u64), virtual_tokens (u64),
+ *   real_rlo_raised (u64), tokens_sold (u64), fees_collected (u64),
+ *   creator_earnings (u64), graduated (bool), token_tax_bps (u64),
+ *   name (string), symbol (string), description (string), image_url (string)
+ *
+ * Curve: constant-product with phantom reserve.
+ *   k = virtual_rlo * virtual_tokens
+ *   virtual_rlo  = PHANTOM_RLO + real_rlo_raised
+ *   virtual_tokens = TOTAL_SUPPLY - tokens_sold
+ *
+ * Graduation: when real_rlo_raised >= GRADUATION_RLO_TARGET (85 RLO on devnet).
  */
+
 import {
   PublicKey,
   TransactionBuilder,
   SYSTEM_PROGRAM_ID,
-  transferInstruction,
-  createAccount,
 } from "@rialo/ts-cdk";
 import type { Transaction } from "@rialo/ts-cdk";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Program ID ───────────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 export const PROGRAM_ID_STR: string =
   (import.meta.env as Record<string, string | undefined>).VITE_PROGRAM_ID
   ?? "AqSikYubk5DEygNhAZh1rSuVvrtNyHTUveLrze1QHn3R";
 
 export const PROGRAM_ID = PublicKey.fromString(PROGRAM_ID_STR);
-export const SYSTEM_PK = PublicKey.fromString(SYSTEM_PROGRAM_ID);
+export const SYSTEM_PK  = PublicKey.fromString(SYSTEM_PROGRAM_ID);
 
-export const KELVIN_PER_RLO = 1_000_000_000n;
-export const INITIAL_VIRTUAL_RLO = 30_000_000_000n;
-export const INITIAL_VIRTUAL_TOKENS = 1_073_000_191n;
-export const GRADUATION_SUPPLY = 800_000_000n;
-export const MAX_SUPPLY = 1_000_000_000n;
-export const PLATFORM_FEE_BPS = 100n;
-export const MAX_TAX_BPS = 1_000n;
+// ─── Constants (mirror state.rs) ─────────────────────────────────────────────
 
-// ─── Instruction type (matches ts-cdk internal shape) ────────────────────────
+export const KELVIN_PER_RLO        = 1_000_000_000n;
+/** Phantom RLO reserve — sets opening price. */
+export const PHANTOM_RLO           = 30_000_000_000n;  // 30 RLO
+/** All 1 billion tokens start on the curve. */
+export const TOTAL_SUPPLY          = 1_000_000_000n;
+/** Graduation when this much real RLO is raised (85 RLO on devnet). */
+export const GRADUATION_RLO_TARGET = 85_000_000_000n;  // 85 RLO
+export const PLATFORM_FEE_BPS      = 100n;             // 1%
+export const MAX_TAX_BPS           = 1_000n;           // 10%
+/** Creation fee paid at launch (0.02 RLO). */
+export const CREATION_FEE_KELVIN   = 20_000_000n;
+export const MIN_BUY_KELVIN        = 1_000_000n;       // 0.001 RLO
+
+// ─── Instruction shape ────────────────────────────────────────────────────────
 
 export interface RialoInstruction {
   programId: PublicKey;
@@ -38,15 +54,13 @@ export interface RialoInstruction {
   data: Uint8Array;
 }
 
-// ─── Borsh helpers ────────────────────────────────────────────────────────────
+// ─── Borsh codec ─────────────────────────────────────────────────────────────
 
 class BorshWriter {
   private buf: Uint8Array;
   private pos = 0;
 
-  constructor(capacity = 256) {
-    this.buf = new Uint8Array(capacity);
-  }
+  constructor(capacity = 256) { this.buf = new Uint8Array(capacity); }
 
   private ensure(n: number) {
     if (this.pos + n > this.buf.length) {
@@ -56,7 +70,7 @@ class BorshWriter {
     }
   }
 
-  writeU8(v: number) { this.ensure(1); this.buf[this.pos++] = v & 0xff; }
+  writeU8(v: number)  { this.ensure(1); this.buf[this.pos++] = v & 0xff; }
 
   writeU32LE(v: number) {
     this.ensure(4);
@@ -74,9 +88,7 @@ class BorshWriter {
   }
 
   writeFixedBytes(b: Uint8Array) {
-    this.ensure(b.length);
-    this.buf.set(b, this.pos);
-    this.pos += b.length;
+    this.ensure(b.length); this.buf.set(b, this.pos); this.pos += b.length;
   }
 
   writeString(s: string) {
@@ -91,23 +103,30 @@ class BorshWriter {
 class BorshReader {
   private pos = 0;
   constructor(private data: Uint8Array) {}
+
   readU8(): number { return this.data[this.pos++]; }
   readBool(): boolean { return this.readU8() !== 0; }
+
   readU32LE(): number {
-    const v = this.data[this.pos] | (this.data[this.pos+1]<<8) | (this.data[this.pos+2]<<16) | (this.data[this.pos+3]<<24);
+    const v =
+      (this.data[this.pos]) |
+      (this.data[this.pos + 1] << 8) |
+      (this.data[this.pos + 2] << 16) |
+      (this.data[this.pos + 3] << 24);
     this.pos += 4;
     return v >>> 0;
   }
+
   readU64LE(): bigint {
     let v = 0n;
     for (let i = 0; i < 8; i++) v |= BigInt(this.data[this.pos++]) << BigInt(i * 8);
     return v;
   }
+
   readFixedBytes(n: number): Uint8Array {
-    const b = this.data.slice(this.pos, this.pos + n);
-    this.pos += n;
-    return b;
+    const b = this.data.slice(this.pos, this.pos + n); this.pos += n; return b;
   }
+
   readString(): string {
     const len = this.readU32LE();
     const bytes = this.data.slice(this.pos, this.pos + len);
@@ -116,18 +135,19 @@ class BorshReader {
   }
 }
 
-// ─── Token state (mirrors Rust TokenState v2) ────────────────────────────────
-// Field order MUST match Rust BorshSerialize derive order in state.rs:
-//   version, creator, virtual_rlo, virtual_tokens, token_supply,
-//   fees_collected, creator_earnings, graduated, token_tax_bps,
-//   name, symbol, description, image_url
+// ─── TokenState (v3) ─────────────────────────────────────────────────────────
 
 export interface TokenState {
   version: number;
   creator: PublicKey;
+  /** virtual_rlo = PHANTOM_RLO + real_rlo_raised (kelvin) */
   virtualRlo: bigint;
+  /** virtual_tokens = TOTAL_SUPPLY - tokens_sold */
   virtualTokens: bigint;
-  tokenSupply: bigint;
+  /** Real RLO deposited by traders (kelvin) */
+  realRloRaised: bigint;
+  /** Tokens sold to traders so far */
+  tokensSold: bigint;
   feesCollected: bigint;
   creatorEarnings: bigint;
   graduated: boolean;
@@ -145,7 +165,8 @@ export function deserializeTokenState(data: Uint8Array): TokenState {
     creator:         PublicKey.fromBytes(r.readFixedBytes(32)),
     virtualRlo:      r.readU64LE(),
     virtualTokens:   r.readU64LE(),
-    tokenSupply:     r.readU64LE(),
+    realRloRaised:   r.readU64LE(),
+    tokensSold:      r.readU64LE(),
     feesCollected:   r.readU64LE(),
     creatorEarnings: r.readU64LE(),
     graduated:       r.readBool(),
@@ -159,21 +180,23 @@ export function deserializeTokenState(data: Uint8Array): TokenState {
 
 // ─── Bonding curve math ───────────────────────────────────────────────────────
 
+/** Constant-product buy: given rlo_in after fees, returns tokens out. */
 export function calcBuy(
   state: Pick<TokenState, "virtualRlo" | "virtualTokens">,
-  rloInAfterFee: bigint
+  rloInAfterFee: bigint,
 ): { tokensOut: bigint; newVr: bigint; newVt: bigint } | null {
   const k = state.virtualRlo * state.virtualTokens;
   const newVr = state.virtualRlo + rloInAfterFee;
   if (newVr === 0n) return null;
   const newVt = k / newVr;
-  if (newVt > state.virtualTokens) return null;
+  if (newVt >= state.virtualTokens) return null;
   return { tokensOut: state.virtualTokens - newVt, newVr, newVt };
 }
 
+/** Constant-product sell: given tokens_in, returns rlo out before fees. */
 export function calcSell(
   state: Pick<TokenState, "virtualRlo" | "virtualTokens">,
-  tokensIn: bigint
+  tokensIn: bigint,
 ): { rloOut: bigint; newVr: bigint; newVt: bigint } | null {
   const k = state.virtualRlo * state.virtualTokens;
   const newVt = state.virtualTokens + tokensIn;
@@ -183,22 +206,21 @@ export function calcSell(
   return { rloOut: state.virtualRlo - newVr, newVr, newVt };
 }
 
-/** Apply platform fee + creator tax to a buy amount.
- *  Returns { afterFee, platformFee, creatorTax } all in kelvin. */
+/** Platform fee + creator tax on a buy. Returns amounts in kelvin. */
 export function applyBuyFees(
   rloAmount: bigint,
-  tokenTaxBps: bigint
-): { afterFee: bigint; platformFee: bigint; creatorTax: bigint } {
+  tokenTaxBps: bigint,
+): { intoCurve: bigint; platformFee: bigint; creatorTax: bigint } {
   const platformFee = (rloAmount * PLATFORM_FEE_BPS) / 10_000n;
   const creatorTax  = (rloAmount * tokenTaxBps) / 10_000n;
-  const afterFee    = rloAmount - platformFee - creatorTax;
-  return { afterFee, platformFee, creatorTax };
+  const intoCurve   = rloAmount - platformFee - creatorTax;
+  return { intoCurve, platformFee, creatorTax };
 }
 
-/** Apply platform fee + creator tax to rlo_out on a sell. */
+/** Platform fee + creator tax on a sell. Returns amounts in kelvin. */
 export function applySellFees(
   rloOut: bigint,
-  tokenTaxBps: bigint
+  tokenTaxBps: bigint,
 ): { toSeller: bigint; platformFee: bigint; creatorTax: bigint } {
   const platformFee = (rloOut * PLATFORM_FEE_BPS) / 10_000n;
   const creatorTax  = (rloOut * tokenTaxBps) / 10_000n;
@@ -206,120 +228,133 @@ export function applySellFees(
   return { toSeller, platformFee, creatorTax };
 }
 
-/** Legacy helper (platform fee only, no creator tax) — kept for quote endpoints. */
-export function applyFee(amount: bigint): { afterFee: bigint; fee: bigint } {
-  const fee = (amount * PLATFORM_FEE_BPS) / 10_000n;
-  return { afterFee: amount - fee, fee };
+/** Graduation progress as a fraction 0–1 (based on real RLO raised). */
+export function graduationProgress(realRloRaised: bigint): number {
+  const pct = Number((realRloRaised * 10_000n) / GRADUATION_RLO_TARGET) / 100;
+  return Math.min(pct, 100);
 }
 
 // ─── PDA derivation ───────────────────────────────────────────────────────────
 
 export function deriveTokenStatePda(tokenId: Uint8Array): { pda: PublicKey; bump: number } {
   const [pda, bump] = PublicKey.findProgramAddress(
-    [new TextEncoder().encode("token"), tokenId],
-    PROGRAM_ID
+    [new TextEncoder().encode("token"), tokenId], PROGRAM_ID,
   );
   return { pda, bump };
 }
 
 export function deriveFeeVaultPda(tokenId: Uint8Array): { pda: PublicKey; bump: number } {
   const [pda, bump] = PublicKey.findProgramAddress(
-    [new TextEncoder().encode("fees"), tokenId],
-    PROGRAM_ID
+    [new TextEncoder().encode("fees"), tokenId], PROGRAM_ID,
   );
   return { pda, bump };
 }
 
 // ─── Instruction encoders ─────────────────────────────────────────────────────
-// Borsh enum variant indices (must match LaunchpadInstruction in instruction.rs):
-//   0 = CreateToken, 1 = Buy, 2 = Sell, 3 = WithdrawFees,
-//   4 = ClaimCreatorEarnings, 5 = UpdateTokenTax
+// Borsh enum discriminant = variant index (matches LaunchpadInstruction in instruction.rs):
+//   0=CreateToken  1=Buy  2=Sell  3=WithdrawFees  4=ClaimCreatorEarnings  5=UpdateTokenTax
 
 function encodeCreateToken(
-  tokenId: Uint8Array,
-  name: string,
-  symbol: string,
-  description: string,
-  imageUrl: string,
-  tokenTaxBps: bigint
+  tokenId: Uint8Array, name: string, symbol: string,
+  description: string, imageUrl: string, tokenTaxBps: bigint,
 ): Uint8Array {
   const w = new BorshWriter(512);
   w.writeU8(0);
   w.writeFixedBytes(tokenId);
-  w.writeString(name);
-  w.writeString(symbol);
-  w.writeString(description);
-  w.writeString(imageUrl);
+  w.writeString(name); w.writeString(symbol);
+  w.writeString(description); w.writeString(imageUrl);
   w.writeU64LE(tokenTaxBps);
   return w.toBytes();
 }
 
 function encodeBuy(tokenId: Uint8Array, rloAmount: bigint, minTokensOut: bigint): Uint8Array {
   const w = new BorshWriter();
-  w.writeU8(1);
-  w.writeFixedBytes(tokenId);
-  w.writeU64LE(rloAmount);
-  w.writeU64LE(minTokensOut);
+  w.writeU8(1); w.writeFixedBytes(tokenId);
+  w.writeU64LE(rloAmount); w.writeU64LE(minTokensOut);
   return w.toBytes();
 }
 
 function encodeSell(tokenId: Uint8Array, tokenAmount: bigint, minRloOut: bigint): Uint8Array {
   const w = new BorshWriter();
-  w.writeU8(2);
-  w.writeFixedBytes(tokenId);
-  w.writeU64LE(tokenAmount);
-  w.writeU64LE(minRloOut);
+  w.writeU8(2); w.writeFixedBytes(tokenId);
+  w.writeU64LE(tokenAmount); w.writeU64LE(minRloOut);
   return w.toBytes();
 }
 
 function encodeWithdrawFees(tokenId: Uint8Array): Uint8Array {
   const w = new BorshWriter();
-  w.writeU8(3);
-  w.writeFixedBytes(tokenId);
+  w.writeU8(3); w.writeFixedBytes(tokenId);
   return w.toBytes();
 }
 
 function encodeClaimCreatorEarnings(tokenId: Uint8Array): Uint8Array {
   const w = new BorshWriter();
-  w.writeU8(4);
-  w.writeFixedBytes(tokenId);
+  w.writeU8(4); w.writeFixedBytes(tokenId);
   return w.toBytes();
 }
 
 function encodeUpdateTokenTax(tokenId: Uint8Array, newTaxBps: bigint): Uint8Array {
   const w = new BorshWriter();
-  w.writeU8(5);
-  w.writeFixedBytes(tokenId);
+  w.writeU8(5); w.writeFixedBytes(tokenId);
   w.writeU64LE(newTaxBps);
   return w.toBytes();
+}
+
+// ─── Transaction builder helper ───────────────────────────────────────────────
+
+interface TxBuilderLike {
+  addInstruction(ix: RialoInstruction): TxBuilderLike;
+  setConfigHashPrefix(v: bigint): TxBuilderLike;
+  build(): Transaction;
+}
+
+function makeTxBuilder(): TxBuilderLike {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+  return new (TransactionBuilder as unknown as new () => TxBuilderLike)();
+}
+
+/**
+ * Build a signed Transaction from a list of instructions.
+ * `feePayer` is the public key that pays the transaction fee.
+ * `validFrom` and `configHashPrefix` are both set from `client.getConfigHashPrefix()`.
+ */
+export function buildTx(
+  instructions: RialoInstruction[],
+  feePayer: PublicKey,
+  validFrom: bigint,
+  configHashPrefix: bigint,
+): Transaction {
+  let builder = makeTxBuilder();
+  for (const ix of instructions) builder = builder.addInstruction(ix);
+  builder = builder.setConfigHashPrefix(validFrom);
+  void feePayer; void configHashPrefix; // feePayer embedded by Keypair.sign; configHashPrefix = validFrom
+  return builder.build();
 }
 
 // ─── Instruction builders ─────────────────────────────────────────────────────
 
 export function buildCreateTokenIx(params: {
   tokenId: Uint8Array;
+  creator: PublicKey;
   name: string;
   symbol: string;
   description: string;
   imageUrl: string;
   tokenTaxBps: bigint;
-  creator: PublicKey;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
+  const { pda: feeVaultPda }   = deriveFeeVaultPda(params.tokenId);
   return {
     programId: PROGRAM_ID,
     accounts: [
-      { pubkey: params.creator, isSigner: true, isWritable: true },
-      { pubkey: tokenStatePda, isSigner: false, isWritable: true },
-      { pubkey: SYSTEM_PK, isSigner: false, isWritable: false },
+      { pubkey: params.creator,     isSigner: true,  isWritable: true  },
+      { pubkey: tokenStatePda,      isSigner: false, isWritable: true  },
+      { pubkey: feeVaultPda,        isSigner: false, isWritable: true  },
+      { pubkey: SYSTEM_PK,          isSigner: false, isWritable: false },
     ],
     data: encodeCreateToken(
-      params.tokenId,
-      params.name,
-      params.symbol,
-      params.description,
-      params.imageUrl,
-      params.tokenTaxBps
+      params.tokenId, params.name, params.symbol,
+      params.description, params.imageUrl, params.tokenTaxBps,
     ),
   };
 }
@@ -328,20 +363,19 @@ export function buildBuyIx(params: {
   tokenId: Uint8Array;
   buyer: PublicKey;
   rloAmount: bigint;
-  /** Minimum tokens acceptable; pass 0n to disable slippage check. */
-  minTokensOut?: bigint;
+  minTokensOut: bigint;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
-  const { pda: feeVaultPda } = deriveFeeVaultPda(params.tokenId);
+  const { pda: feeVaultPda }   = deriveFeeVaultPda(params.tokenId);
   return {
     programId: PROGRAM_ID,
     accounts: [
-      { pubkey: params.buyer, isSigner: true, isWritable: true },
-      { pubkey: tokenStatePda, isSigner: false, isWritable: true },
-      { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-      { pubkey: SYSTEM_PK, isSigner: false, isWritable: false },
+      { pubkey: params.buyer,   isSigner: true,  isWritable: true  },
+      { pubkey: tokenStatePda,  isSigner: false, isWritable: true  },
+      { pubkey: feeVaultPda,    isSigner: false, isWritable: true  },
+      { pubkey: SYSTEM_PK,      isSigner: false, isWritable: false },
     ],
-    data: encodeBuy(params.tokenId, params.rloAmount, params.minTokensOut ?? 0n),
+    data: encodeBuy(params.tokenId, params.rloAmount, params.minTokensOut),
   };
 }
 
@@ -349,36 +383,35 @@ export function buildSellIx(params: {
   tokenId: Uint8Array;
   seller: PublicKey;
   tokenAmount: bigint;
-  /** Minimum RLO acceptable after fees; pass 0n to disable slippage check. */
-  minRloOut?: bigint;
+  minRloOut: bigint;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
-  const { pda: feeVaultPda } = deriveFeeVaultPda(params.tokenId);
+  const { pda: feeVaultPda }   = deriveFeeVaultPda(params.tokenId);
   return {
     programId: PROGRAM_ID,
     accounts: [
-      { pubkey: params.seller, isSigner: true, isWritable: true },
-      { pubkey: tokenStatePda, isSigner: false, isWritable: true },
-      { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-      { pubkey: SYSTEM_PK, isSigner: false, isWritable: false },
+      { pubkey: params.seller,  isSigner: true,  isWritable: true  },
+      { pubkey: tokenStatePda,  isSigner: false, isWritable: true  },
+      { pubkey: feeVaultPda,    isSigner: false, isWritable: true  },
+      { pubkey: SYSTEM_PK,      isSigner: false, isWritable: false },
     ],
-    data: encodeSell(params.tokenId, params.tokenAmount, params.minRloOut ?? 0n),
+    data: encodeSell(params.tokenId, params.tokenAmount, params.minRloOut),
   };
 }
 
 export function buildWithdrawFeesIx(params: {
   tokenId: Uint8Array;
-  creator: PublicKey;
+  authority: PublicKey;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
-  const { pda: feeVaultPda } = deriveFeeVaultPda(params.tokenId);
+  const { pda: feeVaultPda }   = deriveFeeVaultPda(params.tokenId);
   return {
     programId: PROGRAM_ID,
     accounts: [
-      { pubkey: params.creator, isSigner: true, isWritable: true },
-      { pubkey: tokenStatePda, isSigner: false, isWritable: true },
-      { pubkey: feeVaultPda, isSigner: false, isWritable: true },
-      { pubkey: SYSTEM_PK, isSigner: false, isWritable: false },
+      { pubkey: params.authority, isSigner: true,  isWritable: true  },
+      { pubkey: tokenStatePda,    isSigner: false, isWritable: true  },
+      { pubkey: feeVaultPda,      isSigner: false, isWritable: true  },
+      { pubkey: SYSTEM_PK,        isSigner: false, isWritable: false },
     ],
     data: encodeWithdrawFees(params.tokenId),
   };
@@ -392,9 +425,9 @@ export function buildClaimCreatorEarningsIx(params: {
   return {
     programId: PROGRAM_ID,
     accounts: [
-      { pubkey: params.creator, isSigner: true, isWritable: true },
-      { pubkey: tokenStatePda, isSigner: false, isWritable: true },
-      { pubkey: SYSTEM_PK, isSigner: false, isWritable: false },
+      { pubkey: params.creator,   isSigner: true,  isWritable: true  },
+      { pubkey: tokenStatePda,    isSigner: false, isWritable: true  },
+      { pubkey: SYSTEM_PK,        isSigner: false, isWritable: false },
     ],
     data: encodeClaimCreatorEarnings(params.tokenId),
   };
@@ -409,41 +442,9 @@ export function buildUpdateTokenTaxIx(params: {
   return {
     programId: PROGRAM_ID,
     accounts: [
-      { pubkey: params.creator, isSigner: true, isWritable: true },
-      { pubkey: tokenStatePda, isSigner: false, isWritable: true },
+      { pubkey: params.creator,   isSigner: true,  isWritable: false },
+      { pubkey: tokenStatePda,    isSigner: false, isWritable: true  },
     ],
     data: encodeUpdateTokenTax(params.tokenId, params.newTaxBps),
   };
 }
-
-// ─── Transaction builder helper ───────────────────────────────────────────────
-
-// TransactionBuilder has a private constructor in the type defs but a public runtime constructor.
-// Cast via unknown to bypass the TS access check.
-type TxBuilderLike = {
-  setPayer(p: PublicKey): TxBuilderLike;
-  setValidFrom(v: bigint): TxBuilderLike;
-  setConfigHashPrefix(v: bigint): TxBuilderLike;
-  addInstruction(ix: RialoInstruction): TxBuilderLike;
-  build(): Transaction;
-};
-
-export function buildTx(
-  instructions: RialoInstruction[],
-  feePayer: PublicKey,
-  validFrom: bigint,
-  configHashPrefix: bigint
-): Transaction {
-  const Ctor = TransactionBuilder as unknown as new () => TxBuilderLike;
-  const builder = new Ctor()
-    .setPayer(feePayer)
-    .setValidFrom(validFrom)
-    .setConfigHashPrefix(configHashPrefix);
-  for (const ix of instructions) {
-    builder.addInstruction(ix);
-  }
-  return builder.build();
-}
-
-// Re-export for convenience
-export { transferInstruction, createAccount };

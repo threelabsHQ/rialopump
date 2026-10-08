@@ -15,9 +15,13 @@ export interface Token {
   progressPct: number;
   virtualRlo?: number;
   trades?: TradeRecord[];
-  // v2 fields
+  // v3 fields
   tokenTaxBps?: number;
-  creatorEarnings?: number; // kelvin
+  creatorEarnings?: number;   // kelvin
+  /** Real RLO raised toward graduation (kelvin) */
+  realRloRaised?: number;
+  /** Graduation threshold (kelvin) — 85 RLO on devnet */
+  graduationTarget?: number;
   onchain?: boolean;
 }
 

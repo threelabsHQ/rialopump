@@ -106,11 +106,23 @@ export async function requestAirdrop(pubkey: string, rloAmount: number): Promise
 }
 
 // ─── Token ID encoding ────────────────────────────────────────────────────────
-// Token IDs are 16-char strings; encode as 16-byte UTF-8 array
+// Token IDs are stored as 32-char hex strings representing 16 raw bytes.
+// Must match server/index.ts tokenIdToBytes() exactly.
 
-export function tokenIdToBytes(id: string): Uint8Array {
-  const padded = id.slice(0, 16).padEnd(16, "\0");
-  return new Uint8Array(padded.split("").map((c) => c.charCodeAt(0)));
+export function tokenIdToBytes(idHex: string): Uint8Array {
+  const hex = idHex.replace(/-/g, "").slice(0, 32).padEnd(32, "0");
+  const out = new Uint8Array(16);
+  for (let i = 0; i < 16; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/** Generate a random 16-byte token ID as a 32-char hex string. */
+export function makeTokenIdHex(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // Re-export PublicKey for callers that need it

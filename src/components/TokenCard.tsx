@@ -2,7 +2,7 @@ import { GlassCard } from "./ui/GlassCard";
 import { ProgressBar } from "./ui/ProgressBar";
 import { TokenAvatar } from "./ui/TokenAvatar";
 import type { Token } from "../types";
-import { formatRlo, formatLargeNumber, timeAgo } from "../utils/crypto";
+import { formatRlo, timeAgo } from "../utils/crypto";
 
 
 interface TokenCardProps {
@@ -82,10 +82,16 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
         graduated={token.graduated}
       />
 
-      {/* Footer */}
+      {/* Footer: RLO raised / graduation target */}
       <div className="flex items-center justify-between text-xs" style={{ color: "var(--subtle)" }}>
         <span>{timeAgo(token.createdAt)}</span>
-        <span>{formatLargeNumber(token.tokenSupply)} / {formatLargeNumber(800_000_000)} supply</span>
+        {token.graduated ? (
+          <span style={{ color: "var(--success)" }}>Graduated</span>
+        ) : (
+          <span>
+            {((token.realRloRaised ?? 0) / 1_000_000_000).toFixed(2)} / {((token.graduationTarget ?? 85_000_000_000) / 1_000_000_000).toFixed(0)} RLO
+          </span>
+        )}
       </div>
     </GlassCard>
   );

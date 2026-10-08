@@ -94,8 +94,8 @@ export class BorshWriter {
 
 // ─── Token state ──────────────────────────────────────────────────────────────
 
-// Field order mirrors Rust BorshSerialize for TokenState v2 (state.rs):
-//   version, creator, virtual_rlo, virtual_tokens, token_supply,
+// Field order mirrors Rust BorshSerialize for TokenState v3 (state.rs):
+//   version, creator, virtual_rlo, virtual_tokens, real_rlo_raised, tokens_sold,
 //   fees_collected, creator_earnings, graduated, token_tax_bps,
 //   name, symbol, description, image_url
 export interface ServerTokenState {
@@ -103,7 +103,8 @@ export interface ServerTokenState {
   creator: string; // base58
   virtualRlo: bigint;
   virtualTokens: bigint;
-  tokenSupply: bigint;
+  realRloRaised: bigint;
+  tokensSold: bigint;
   feesCollected: bigint;
   creatorEarnings: bigint;
   graduated: boolean;
@@ -121,7 +122,8 @@ export function deserializeTokenState(data: Uint8Array): ServerTokenState {
     creator:         PublicKey.fromBytes(r.readFixedBytes(32)).toString(),
     virtualRlo:      r.readU64LE(),
     virtualTokens:   r.readU64LE(),
-    tokenSupply:     r.readU64LE(),
+    realRloRaised:   r.readU64LE(),
+    tokensSold:      r.readU64LE(),
     feesCollected:   r.readU64LE(),
     creatorEarnings: r.readU64LE(),
     graduated:       r.readBool(),

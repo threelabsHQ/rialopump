@@ -6,7 +6,7 @@ import type { WalletState } from "../types";
 import { toast } from "sonner";
 import { Loader2, Rocket, Upload, ExternalLink, Percent } from "lucide-react";
 import { clsx } from "clsx";
-import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes } from "../rialo/chain";
+import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes, makeTokenIdHex } from "../rialo/chain";
 import { buildCreateTokenIx } from "../rialo/program";
 
 interface CreateTokenFormProps {
@@ -29,11 +29,6 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
 
   const valid = name.trim().length > 0 && symbol.trim().length > 0;
 
-  function makeTokenId(n: string, s: string): string {
-    const raw = (n + s + Date.now().toString()).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-    return raw.slice(0, 16).padEnd(16, "0");
-  }
-
   const handleCreate = async () => {
     if (!wallet) { toast.error("Connect a wallet first"); return; }
     if (!valid) { toast.error("Name and symbol are required"); return; }
@@ -46,7 +41,8 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
     setTxHash(null);
 
     try {
-      const tokenIdHex = makeTokenId(name, symbol);
+      // Generate a random 32-char hex token ID (16 random bytes)
+      const tokenIdHex = makeTokenIdHex();
       const tokenIdBytes = tokenIdToBytes(tokenIdHex);
       const keypair = keypairFromHex(wallet.secretHex);
 
@@ -207,7 +203,7 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
           <p className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>How it works</p>
           <ul className="text-xs space-y-0.5" style={{ color: "var(--muted)" }}>
             <li>• 1B total supply with x·y=k bonding curve pricing</li>
-            <li>• Graduates to full DEX at 800M tokens sold</li>
+            <li>• Graduates when 85 RLO raised (devnet threshold)</li>
             <li>• 1% platform fee on all trades (goes to fee vault)</li>
             {tokenTaxBps > 0 && (
               <li>• {(tokenTaxBps / 100).toFixed(1)}% creator tax accrues to your Creator Dashboard</li>

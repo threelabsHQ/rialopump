@@ -49,13 +49,16 @@ interface TokenRecord {
   imageUrl: string;
   creator: string;
   createdAt: number;
+  /** Tokens sold to traders (formerly tokenSupply) */
   tokenSupply: number;
   totalSupply: number;
   graduated: boolean;
   trades: TradeRecord[];
   marketCap: number;
-  tokenTaxBps: number;    // creator-set tax in basis points (0–1000)
-  creatorEarnings: number; // unclaimed creator earnings in kelvin
+  tokenTaxBps: number;
+  creatorEarnings: number;
+  /** Real RLO raised toward graduation (kelvin) */
+  realRloRaised: number;
   onchain: boolean;
   tokenIdHex: string;
 }
@@ -83,51 +86,61 @@ function saveTokens(tokens: Map<string, TokenRecord>) {
 
 const tokens: Map<string, TokenRecord> = loadTokens();
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const KELVIN_PER_RLO = 1_000_000_000;
-const MAX_TOKEN_SUPPLY = 1_000_000_000;
-const GRADUATION_SUPPLY = 800_000_000;
-const INITIAL_VIRTUAL_RLO = 30 * KELVIN_PER_RLO;
-const INITIAL_VIRTUAL_TOKENS = 1_073_000_191;
-const PLATFORM_FEE_BPS = 100;
+// ─── Constants (must match program/src/state.rs) ─────────────────────────────
+const KELVIN_PER_RLO      = 1_000_000_000;
+const TOTAL_SUPPLY        = 1_000_000_000;   // all tokens start on curve
+/** Phantom reserve — sets opening price. virtual_rlo starts here. */
+const PHANTOM_RLO         = 30 * KELVIN_PER_RLO;
+/** Graduation threshold in kelvin (85 RLO on devnet). */
+const GRADUATION_RLO_TARGET = 85 * KELVIN_PER_RLO;
+const PLATFORM_FEE_BPS    = 100;
+/** Creation fee (0.02 RLO) — for balance check at creation time. */
+const CREATION_FEE_KELVIN = 20_000_000;
 
 // ─── Bonding curve math ───────────────────────────────────────────────────────
+
+/** Constant-product buy. Returns tokens_out using floating-point (server-side). */
 function calcBuyTokens(rloIn: number, virtualRlo: number, virtualTokens: number) {
   const k = virtualRlo * virtualTokens;
-  const newVirtualRlo = virtualRlo + rloIn;
-  const newVirtualTokens = k / newVirtualRlo;
-  return {
-    tokensOut: Math.floor(virtualTokens - newVirtualTokens),
-    newVirtualRlo,
-    newVirtualTokens,
-  };
+  const newVr = virtualRlo + rloIn;
+  const newVt = k / newVr;
+  return { tokensOut: Math.floor(virtualTokens - newVt), newVr, newVt };
 }
 
+/** Constant-product sell. Returns rlo_out before fees. */
 function calcSellRlo(tokensIn: number, virtualRlo: number, virtualTokens: number) {
   const k = virtualRlo * virtualTokens;
-  const newVirtualTokens = virtualTokens + tokensIn;
-  const newVirtualRlo = k / newVirtualTokens;
-  return {
-    rloOut: Math.floor(virtualRlo - newVirtualRlo),
-    newVirtualRlo,
-    newVirtualTokens,
-  };
+  const newVt = virtualTokens + tokensIn;
+  const newVr = k / newVt;
+  return { rloOut: Math.floor(virtualRlo - newVr), newVr, newVt };
 }
 
+/**
+ * Reconstruct current virtual state by replaying trades.
+ * virtual_rlo starts at PHANTOM_RLO; virtual_tokens starts at TOTAL_SUPPLY.
+ * Also tracks realRloRaised for graduation progress.
+ */
 function buildVirtualState(t: TokenRecord) {
-  let vRlo = INITIAL_VIRTUAL_RLO;
-  let vTokens = INITIAL_VIRTUAL_TOKENS;
+  let vRlo    = PHANTOM_RLO;
+  let vTokens = TOTAL_SUPPLY;
+  let realRloRaised = 0;
   for (const trade of t.trades) {
+    const taxBps = t.tokenTaxBps || 0;
     if (trade.type === "buy") {
       const fee = Math.floor(trade.rloAmount * PLATFORM_FEE_BPS / 10_000);
-      const r = calcBuyTokens(trade.rloAmount - fee, vRlo, vTokens);
-      vRlo = r.newVirtualRlo; vTokens = r.newVirtualTokens;
+      const tax = Math.floor(trade.rloAmount * taxBps / 10_000);
+      const into = trade.rloAmount - fee - tax;
+      const r = calcBuyTokens(into, vRlo, vTokens);
+      vRlo = r.newVr; vTokens = r.newVt;
+      realRloRaised += into;
     } else {
       const r = calcSellRlo(trade.tokenAmount, vRlo, vTokens);
-      vRlo = r.newVirtualRlo; vTokens = r.newVirtualTokens;
+      vRlo = r.newVr; vTokens = r.newVt;
+      realRloRaised = Math.max(0, realRloRaised - r.rloOut);
     }
   }
-  return { virtualRlo: vRlo, virtualTokens: vTokens, currentPrice: vRlo / vTokens };
+  const currentPrice = vTokens > 0 ? vRlo / vTokens : 0;
+  return { virtualRlo: vRlo, virtualTokens: vTokens, currentPrice, realRloRaised };
 }
 
 // ─── Sync onchain state into token record ─────────────────────────────────────
@@ -145,7 +158,7 @@ async function syncOnchainState(t: TokenRecord): Promise<void> {
       ? info.data
       : new Uint8Array(Buffer.from(raw, "base64"));
     const state = deserializeTokenState(data);
-    t.tokenSupply     = Number(state.tokenSupply);
+    t.tokenSupply     = Number(state.tokensSold);
     t.graduated       = state.graduated;
     t.tokenTaxBps     = Number(state.tokenTaxBps);
     t.creatorEarnings = Number(state.creatorEarnings);
@@ -153,14 +166,25 @@ async function syncOnchainState(t: TokenRecord): Promise<void> {
     const vTokens = Number(state.virtualTokens);
     const price   = vTokens > 0 ? vRlo / vTokens : 0;
     t.marketCap   = Math.round(price * t.tokenSupply);
+    // Store real RLO raised for graduation progress (not tokens sold)
+    t.realRloRaised = Number(state.realRloRaised);
   } catch {
     // keep cached values if chain read fails
   }
 }
 
+/**
+ * Decode a 16-byte token ID from its hex string representation.
+ * The hex string is exactly 32 chars (16 bytes × 2 hex digits each).
+ * If shorter, pad with zero bytes on the right.
+ */
 function tokenIdToBytes(idHex: string): Uint8Array {
-  const padded = idHex.slice(0, 16).padEnd(16, "\0");
-  return new Uint8Array(padded.split("").map((c) => c.charCodeAt(0)));
+  const hex = idHex.replace(/-/g, "").slice(0, 32).padEnd(32, "0");
+  const out = new Uint8Array(16);
+  for (let i = 0; i < 16; i++) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -219,7 +243,8 @@ app.get("/tokens", async (_req, res) => {
   const result = list
     .sort((a, b) => b.marketCap - a.marketCap)
     .map((t) => {
-      const { currentPrice } = buildVirtualState(t);
+      const vs = buildVirtualState(t);
+      const rloRaised = t.realRloRaised || vs.realRloRaised;
       return {
         id: t.id,
         name: t.name,
@@ -232,11 +257,13 @@ app.get("/tokens", async (_req, res) => {
         totalSupply: t.totalSupply,
         graduated: t.graduated,
         tradeCount: t.trades.length,
-        currentPrice,
+        currentPrice: vs.currentPrice,
         marketCap: t.marketCap,
-        progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
+        progressPct: Math.min(100, (rloRaised / GRADUATION_RLO_TARGET) * 100),
         tokenTaxBps: t.tokenTaxBps || 0,
         creatorEarnings: t.creatorEarnings || 0,
+        realRloRaised: rloRaised,
+        graduationTarget: GRADUATION_RLO_TARGET,
         onchain: t.onchain,
       };
     });
@@ -262,8 +289,10 @@ app.get("/tokens/:id", async (req, res) => {
     tradeCount: t.trades.length,
     currentPrice: state.currentPrice,
     marketCap: t.marketCap,
-    progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
+    progressPct: Math.min(100, ((t.realRloRaised || state.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
     virtualRlo: state.virtualRlo,
+    realRloRaised: t.realRloRaised || state.realRloRaised,
+    graduationTarget: GRADUATION_RLO_TARGET,
     tokenTaxBps: t.tokenTaxBps || 0,
     creatorEarnings: t.creatorEarnings || 0,
     onchain: t.onchain,
@@ -293,9 +322,10 @@ app.post("/tokens", async (req, res) => {
     }
 
     const balance = await client.getBalance(pk);
-    const minRequired = BigInt(Math.round(0.05 * KELVIN_PER_RLO));
+    // Must cover creation fee (0.02 RLO) + rent for PDA + first buy overhead
+    const minRequired = BigInt(CREATION_FEE_KELVIN + Math.round(0.05 * KELVIN_PER_RLO));
     if (balance < minRequired) {
-      return res.status(400).json({ error: "Insufficient balance — need at least 0.05 RLO." });
+      return res.status(400).json({ error: "Insufficient balance — need at least 0.07 RLO to launch." });
     }
 
     let txHash = "";
@@ -325,12 +355,13 @@ app.post("/tokens", async (req, res) => {
       creator,
       createdAt: Date.now(),
       tokenSupply: 0,
-      totalSupply: MAX_TOKEN_SUPPLY,
+      totalSupply: TOTAL_SUPPLY,
       graduated: false,
       trades: [],
       marketCap: 0,
       tokenTaxBps: taxBps,
       creatorEarnings: 0,
+      realRloRaised: 0,
       onchain,
       tokenIdHex: idHex,
     };
@@ -358,7 +389,8 @@ app.post("/tokens/:id/quote-buy", (req, res) => {
   const rloAfter    = rloAmount - platformFee - creatorTax;
 
   const { tokensOut } = calcBuyTokens(rloAfter, state.virtualRlo, state.virtualTokens);
-  const limited = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
+  const available = TOTAL_SUPPLY - t.tokenSupply;
+  const limited = Math.min(tokensOut, available);
   res.json({
     tokensOut: limited,
     fee: platformFee,
@@ -429,8 +461,9 @@ app.post("/tokens/:id/buy", async (req, res) => {
     const taxBps   = t.tokenTaxBps || 0;
     const fee      = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10_000);
     const tax      = Math.floor(rloAmount * taxBps / 10_000);
-    const { tokensOut } = calcBuyTokens(rloAmount - fee - tax, state.virtualRlo, state.virtualTokens);
-    const limitedTokens = Math.min(tokensOut, GRADUATION_SUPPLY - t.tokenSupply);
+    const into     = rloAmount - fee - tax;
+    const { tokensOut } = calcBuyTokens(into, state.virtualRlo, state.virtualTokens);
+    const limitedTokens = Math.min(tokensOut, TOTAL_SUPPLY - t.tokenSupply);
     if (limitedTokens <= 0) return res.status(400).json({ error: "No tokens available" });
 
     const trade: TradeRecord = {
@@ -448,7 +481,8 @@ app.post("/tokens/:id/buy", async (req, res) => {
     t.trades.push(trade);
     if (!onchain) {
       t.tokenSupply += limitedTokens;
-      if (t.tokenSupply >= GRADUATION_SUPPLY) t.graduated = true;
+      t.realRloRaised = (t.realRloRaised || 0) + into;
+      if (t.realRloRaised >= GRADUATION_RLO_TARGET) t.graduated = true;
     }
     const newState = buildVirtualState(t);
     t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
@@ -459,7 +493,7 @@ app.post("/tokens/:id/buy", async (req, res) => {
       success: true, trade,
       tokenSupply: t.tokenSupply, graduated: t.graduated,
       currentPrice: newState.currentPrice,
-      progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
+      progressPct: Math.min(100, ((t.realRloRaised || newState.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
     });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
@@ -521,7 +555,10 @@ app.post("/tokens/:id/sell", async (req, res) => {
     };
 
     t.trades.push(trade);
-    if (!onchain) t.tokenSupply -= tokenAmount;
+    if (!onchain) {
+      t.tokenSupply -= tokenAmount;
+      t.realRloRaised = Math.max(0, (t.realRloRaised || 0) - rloGross);
+    }
     const newState = buildVirtualState(t);
     t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
     tokens.set(t.id, t);
@@ -530,7 +567,7 @@ app.post("/tokens/:id/sell", async (req, res) => {
     res.json({
       success: true, trade,
       tokenSupply: t.tokenSupply, currentPrice: newState.currentPrice,
-      progressPct: Math.min(100, (t.tokenSupply / GRADUATION_SUPPLY) * 100),
+      progressPct: Math.min(100, ((t.realRloRaised || newState.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
     });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
