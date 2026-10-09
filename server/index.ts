@@ -270,10 +270,11 @@ async function syncOnchainState(t: TokenRecord): Promise<void> {
     t.creatorEarnings = Number(state.creatorEarnings);
     const vRlo    = Number(state.virtualRlo);
     const vTokens = Number(state.virtualTokens);
-    const price   = vTokens > 0 ? vRlo / vTokens : 0;
-    t.marketCap   = Math.round(price * t.tokenSupply);
-    // Store real RLO raised for graduation progress (not tokens sold)
-    t.realRloRaised = Number(state.realRloRaised);
+    const priceKelvin = vTokens > 0 ? vRlo / vTokens : 0;        // kelvin / token
+    const priceRlo    = kelvinToRlo(priceKelvin);                  // RLO / token
+    t.marketCap   = priceRlo * t.tokenSupply;                      // RLO
+    // Store real RLO raised in kelvin (raw from chain) for graduation progress
+    t.realRloRaised = Number(state.realRloRaised);                 // kelvin
   } catch {
     // keep cached values if chain read fails
   }
@@ -377,7 +378,7 @@ app.get("/tokens", async (_req, res) => {
     .sort((a, b) => b.marketCap - a.marketCap)
     .map((t) => {
       const vs = buildVirtualState(t);
-      const rloRaised = t.realRloRaised || vs.realRloRaised;
+      const rloRaisedKelvin = t.realRloRaised || vs.realRloRaised;
       return {
         id: t.id,
         name: t.name,
@@ -390,13 +391,13 @@ app.get("/tokens", async (_req, res) => {
         totalSupply: t.totalSupply,
         graduated: t.graduated,
         tradeCount: t.trades.length,
-        currentPrice: kelvinToRlo(vs.currentPrice),
-        marketCap: t.marketCap,
-        progressPct: Math.min(100, (rloRaised / GRADUATION_RLO_TARGET) * 100),
+        currentPrice: kelvinToRlo(vs.currentPrice),      // RLO/token
+        marketCap: t.marketCap,                           // RLO
+        progressPct: Math.min(100, (rloRaisedKelvin / GRADUATION_RLO_TARGET) * 100),
         tokenTaxBps: t.tokenTaxBps || 0,
         creatorEarnings: t.creatorEarnings || 0,
-        realRloRaised: rloRaised,
-        graduationTarget: GRADUATION_RLO_TARGET,
+        realRloRaised: kelvinToRlo(rloRaisedKelvin),      // RLO
+        graduationTarget: kelvinToRlo(GRADUATION_RLO_TARGET), // RLO (= 85)
         onchain: t.onchain,
       };
     });
@@ -420,12 +421,12 @@ app.get("/tokens/:id", async (req, res) => {
     totalSupply: t.totalSupply,
     graduated: t.graduated,
     tradeCount: t.trades.length,
-    currentPrice: kelvinToRlo(state.currentPrice),
-    marketCap: t.marketCap,
+    currentPrice: kelvinToRlo(state.currentPrice),           // RLO/token
+    marketCap: t.marketCap,                                   // RLO
     progressPct: Math.min(100, ((t.realRloRaised || state.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
-    virtualRlo: state.virtualRlo,
-    realRloRaised: t.realRloRaised || state.realRloRaised,
-    graduationTarget: GRADUATION_RLO_TARGET,
+    virtualRlo: kelvinToRlo(state.virtualRlo),                // RLO (for chart)
+    realRloRaised: kelvinToRlo(t.realRloRaised || state.realRloRaised), // RLO
+    graduationTarget: kelvinToRlo(GRADUATION_RLO_TARGET),     // RLO (= 85)
     tokenTaxBps: t.tokenTaxBps || 0,
     creatorEarnings: t.creatorEarnings || 0,
     onchain: t.onchain,
@@ -440,8 +441,8 @@ app.get("/tokens/:id/state", async (req, res) => {
   const state = buildVirtualState(t);
   res.json({
     tokensSold: t.tokenSupply,
-    realRloRaised: t.realRloRaised || state.realRloRaised,
-    creatorEarnings: t.creatorEarnings || 0,
+    realRloRaised: kelvinToRlo(t.realRloRaised || state.realRloRaised), // RLO
+    creatorEarnings: t.creatorEarnings || 0, // kelvin (frontend uses formatRlo)
     tokenTaxBps: t.tokenTaxBps || 0,
     graduated: t.graduated,
   });
@@ -641,7 +642,7 @@ app.post("/tokens/:id/buy", async (req, res) => {
       await syncOnchainState(t);
     }
     const newState = buildVirtualState(t);
-    t.marketCap = Math.round(kelvinToRlo(newState.currentPrice) * t.tokenSupply);
+    t.marketCap = kelvinToRlo(newState.currentPrice) * t.tokenSupply;
     tokens.set(t.id, t);
     saveTokens(tokens);
 
@@ -717,7 +718,7 @@ app.post("/tokens/:id/sell", async (req, res) => {
       await syncOnchainState(t);
     }
     const newState = buildVirtualState(t);
-    t.marketCap = Math.round(kelvinToRlo(newState.currentPrice) * t.tokenSupply);
+    t.marketCap = kelvinToRlo(newState.currentPrice) * t.tokenSupply;
     tokens.set(t.id, t);
     saveTokens(tokens);
 

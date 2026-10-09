@@ -2,7 +2,7 @@ import { GlassCard } from "./ui/GlassCard";
 import { ProgressBar } from "./ui/ProgressBar";
 import { TokenAvatar } from "./ui/TokenAvatar";
 import type { Token } from "../types";
-import { formatRlo, timeAgo } from "../utils/crypto";
+import { timeAgo } from "../utils/crypto";
 
 
 interface TokenCardProps {
@@ -11,7 +11,8 @@ interface TokenCardProps {
 }
 
 export function TokenCard({ token, onClick }: TokenCardProps) {
-  const mcapRlo = token.marketCap / 1_000_000_000;
+  // marketCap is already in RLO (server converts from kelvin before sending)
+  const mcapRlo = token.marketCap;
 
   return (
     <GlassCard
@@ -63,7 +64,9 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
           <p className="text-xs" style={{ color: "var(--muted)" }}>Price</p>
           <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
             {token.currentPrice > 0
-              ? formatRlo(token.currentPrice * 1_000_000_000, 6)
+              ? token.currentPrice < 0.000001
+                ? token.currentPrice.toExponential(2)
+                : token.currentPrice.toFixed(6)
               : "0"} RLO
           </p>
         </div>
@@ -89,7 +92,7 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
           <span style={{ color: "var(--success)" }}>Graduated</span>
         ) : (
           <span>
-            {((token.realRloRaised ?? 0) / 1_000_000_000).toFixed(2)} / {((token.graduationTarget ?? 85_000_000_000) / 1_000_000_000).toFixed(0)} RLO
+            {(token.realRloRaised ?? 0).toFixed(2)} / {(token.graduationTarget ?? 85).toFixed(0)} RLO raised
           </span>
         )}
       </div>

@@ -135,12 +135,11 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
 
 function TokenInfo({ token, trades }: { token: Token; trades: TradeRecord[] }) {
   const copy = (text: string) => { void navigator.clipboard.writeText(text).then(() => toast.success("Copied")); };
-  const KELVIN = 1_000_000_000;
 
   const stats = [
     { label: "Total Supply", value: formatLargeNumber(token.totalSupply) },
     { label: "Tokens Sold", value: formatLargeNumber(token.tokenSupply) },
-    { label: "Mkt Cap", value: `${(token.marketCap / KELVIN).toFixed(2)} RLO` },
+    { label: "Mkt Cap", value: `${token.marketCap >= 0.001 ? token.marketCap.toFixed(3) : token.marketCap.toExponential(2)} RLO` },
     { label: "Trades", value: token.tradeCount?.toString() || trades.length.toString() },
   ];
 
@@ -160,7 +159,7 @@ function TokenInfo({ token, trades }: { token: Token; trades: TradeRecord[] }) {
       </div>
       <ProgressBar
         value={token.progressPct}
-        label={`Graduation — ${((token.realRloRaised ?? 0) / 1_000_000_000).toFixed(2)} / ${((token.graduationTarget ?? 85_000_000_000) / 1_000_000_000).toFixed(0)} RLO raised`}
+        label={`Graduation — ${(token.realRloRaised ?? 0).toFixed(2)} / ${(token.graduationTarget ?? 85).toFixed(0)} RLO raised`}
         graduated={token.graduated}
       />
       <div className="flex items-center justify-between text-xs pt-1">
