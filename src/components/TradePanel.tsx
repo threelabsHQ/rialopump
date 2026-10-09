@@ -3,9 +3,8 @@ import { GlassCard, InnerField } from "./ui/GlassCard";
 import { api } from "../api";
 import type { Token, WalletState } from "../types";
 import { formatRlo } from "../utils/crypto";
-import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2, ExternalLink } from "lucide-react";
+import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2, ExternalLink, Wallet } from "lucide-react";
 import { toast } from "sonner";
-
 import { clsx } from "clsx";
 import { tokenIdToBytes } from "../rialo/chain";
 import { buildBuyIx, buildSellIx } from "../rialo/program";
@@ -30,6 +29,7 @@ interface TradePanelProps {
 type TxState = "idle" | "quoting" | "signing" | "confirming" | "success" | "error";
 
 const EXPLORER_BASE = "https://rialo-explorer-devnet-direct.vercel.app";
+const KELVIN = 1_000_000_000;
 
 export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) {
   const [tab, setTab] = useState<"buy" | "sell">("buy");
@@ -38,17 +38,38 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
   const [txState, setTxState] = useState<TxState>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [tokenBalance, setTokenBalance] = useState<number>(0);
+  const [rloBalance, setRloBalance] = useState<number>(0);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const KELVIN = 1_000_000_000;
-  const quickAmounts = tab === "buy" ? [0.1, 0.5, 1, 5] : [1_000, 10_000, 100_000, 500_000];
+  // Load balances when wallet or token changes
+  const loadBalances = useCallback(async () => {
+    if (!wallet?.pubkey) return;
+    try {
+      // RLO balance
+      const bal = await api.balance(wallet.pubkey);
+      setRloBalance(parseFloat(bal.rlo));
+      // Token balance from portfolio
+      const port = await api.portfolio(wallet.pubkey);
+      const holding = port.find((h) => h.token.id === token.id);
+      setTokenBalance(holding?.balance ?? 0);
+    } catch { /* ignore */ }
+  }, [wallet, token.id]);
+
+  // oxlint-disable-next-line react/set-state-in-effect -- async balance fetch on wallet/token change is intentional
+  useEffect(() => { void loadBalances(); }, [loadBalances]);
+
+  // Re-fetch balances after a successful trade
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- refresh after confirmed trade is intentional
+    if (txState === "success") void loadBalances();
+  }, [txState, loadBalances]);
 
   const fetchQuote = useCallback(async (val: string) => {
     if (!val || parseFloat(val) <= 0) { setQuote(null); return; }
     setTxState("quoting");
     try {
       if (tab === "buy") {
-        // Server quote-buy expects RLO float, not kelvin
         const q = await api.quoteBuy(token.id, parseFloat(val));
         setQuote(q);
       } else {
@@ -65,12 +86,19 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
     return () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [amount, tab, fetchQuote]);
 
+  // % sell shortcuts
+  const sellPct = (pct: number) => {
+    const tokens = Math.floor(tokenBalance * pct / 100);
+    if (tokens > 0) setAmount(tokens.toString());
+  };
+
   const handleTrade = async () => {
     if (!wallet) { toast.error("Connect wallet first"); return; }
     if (!amount || parseFloat(amount) <= 0) { toast.error("Enter an amount"); return; }
 
     setTxState("signing");
     setErrorMsg(null);
+    setTxHash(null);
 
     try {
       const tokenIdBytes = tokenIdToBytes(token.id);
@@ -79,26 +107,24 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
 
       if (tab === "buy") {
         const rloFloat = parseFloat(amount);
+        if (rloFloat > rloBalance) { throw new Error(`Insufficient balance. You have ${rloBalance.toFixed(4)} RLO`); }
         const kelvin = BigInt(Math.round(rloFloat * KELVIN));
         const minTokensOut = quote?.tokensOut ? BigInt(Math.floor(quote.tokensOut * 0.95)) : 0n;
         const ix = buildBuyIx({ tokenId: tokenIdBytes, buyer: traderPk, rloAmount: kelvin, minTokensOut });
-        // signTx handles all wallet types (generated local key / extension Frost popup)
         const signedTxBase64 = await signTx([ix]);
-
         setTxState("confirming");
-        // Server buy expects rloAmount in RLO float
         const result = await api.buy(token.id, wallet.pubkey, rloFloat, signedTxBase64);
         toast.success(`Bought ${result.trade.tokenAmount.toLocaleString()} $${token.symbol}`);
         setTxHash(result.trade.txHash);
       } else {
-        const tokenAmt = BigInt(Math.round(parseFloat(amount)));
+        const tokenAmt = Math.round(parseFloat(amount));
+        if (tokenAmt > tokenBalance) { throw new Error(`Insufficient balance. You hold ${tokenBalance.toLocaleString()} $${token.symbol}`); }
         const minRloOut = quote?.rloOut ? BigInt(Math.floor(quote.rloOut * 0.95 * KELVIN)) : 0n;
-        const ix = buildSellIx({ tokenId: tokenIdBytes, seller: traderPk, tokenAmount: tokenAmt, minRloOut });
+        const ix = buildSellIx({ tokenId: tokenIdBytes, seller: traderPk, tokenAmount: BigInt(tokenAmt), minRloOut });
         const signedTxBase64 = await signTx([ix]);
-
         setTxState("confirming");
-        const result = await api.sell(token.id, wallet.pubkey, Number(tokenAmt), signedTxBase64);
-        toast.success(`Sold ${Number(tokenAmt).toLocaleString()} $${token.symbol}`);
+        const result = await api.sell(token.id, wallet.pubkey, tokenAmt, signedTxBase64);
+        toast.success(`Sold ${tokenAmt.toLocaleString()} $${token.symbol}`);
         setTxHash(result.trade.txHash);
       }
 
@@ -113,7 +139,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
   };
 
   const isBusy = txState === "quoting" || txState === "signing" || txState === "confirming";
-  const isReal = txHash && !txHash.startsWith("sim_");
+  const isReal = txHash && !txHash.startsWith("sim_") && !txHash.startsWith("111111");
 
   return (
     <GlassCard className="p-4 space-y-4">
@@ -122,7 +148,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
         {(["buy", "sell"] as const).map((t) => (
           <button
             key={t}
-            onClick={() => { setTab(t); setAmount(""); setQuote(null); setTxState("idle"); }}
+            onClick={() => { setTab(t); setAmount(""); setQuote(null); setTxState("idle"); setErrorMsg(null); }}
             className={clsx(
               "flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2",
               tab === t && "shadow-sm"
@@ -137,19 +163,55 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
         ))}
       </div>
 
+      {/* Balance row */}
+      {wallet && (
+        <div className="flex items-center justify-between text-xs px-1">
+          <div className="flex items-center gap-1.5" style={{ color: "var(--muted)" }}>
+            <Wallet size={11} />
+            <span>Balance:</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="font-semibold tabular-nums" style={{ color: "var(--ink)" }}>
+              {rloBalance >= 0.001 ? rloBalance.toFixed(4) : rloBalance.toExponential(2)} RLO
+            </span>
+            {tokenBalance > 0 && (
+              <span className="font-semibold tabular-nums" style={{ color: "var(--ink-2)" }}>
+                {tokenBalance.toLocaleString()} ${token.symbol}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Quick amounts */}
-      <div className="flex gap-2 flex-wrap">
-        {quickAmounts.map((q) => (
-          <button
-            key={q}
-            onClick={() => setAmount(q.toString())}
-            className="px-3 py-1 rounded-lg text-xs font-semibold transition-all active:scale-95"
-            style={{ background: "rgba(255,255,255,0.58)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.66)", color: "var(--ink-2)" }}
-          >
-            {tab === "buy" ? `${q} RLO` : `${q >= 1000 ? (q / 1000).toFixed(0) + "K" : q}`}
-          </button>
-        ))}
-      </div>
+      {tab === "buy" ? (
+        <div className="flex gap-2 flex-wrap">
+          {[0.1, 0.5, 1, 5].map((q) => (
+            <button
+              key={q}
+              onClick={() => setAmount(q.toString())}
+              className="px-3 py-1 rounded-lg text-xs font-semibold transition-all active:scale-95"
+              style={{ background: "rgba(255,255,255,0.58)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.66)", color: "var(--ink-2)" }}
+            >
+              {q} RLO
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="flex gap-2 flex-wrap">
+          {[25, 50, 75, 100].map((pct) => (
+            <button
+              key={pct}
+              onClick={() => sellPct(pct)}
+              disabled={tokenBalance <= 0}
+              className="flex-1 py-1 rounded-lg text-xs font-semibold transition-all active:scale-95 disabled:opacity-40"
+              style={{ background: "rgba(255,255,255,0.58)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.66)", color: "var(--ink-2)" }}
+            >
+              {pct}%
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Amount input */}
       <InnerField className="flex items-center gap-2 px-4 py-3">
@@ -168,6 +230,13 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
         </span>
       </InnerField>
 
+      {/* Token balance hint on sell */}
+      {tab === "sell" && tokenBalance === 0 && wallet && (
+        <p className="text-xs text-center" style={{ color: "var(--muted)" }}>
+          You hold 0 ${token.symbol}
+        </p>
+      )}
+
       {/* Quote */}
       {quote && (
         <div className="rounded-xl p-3 space-y-1.5" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
@@ -176,12 +245,14 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
             <span className="font-semibold tabular-nums" style={{ color: "var(--ink)" }}>
               {tab === "buy"
                 ? `~${(quote.tokensOut || 0).toLocaleString()} $${token.symbol}`
-                : `~${formatRlo(quote.rloOut || 0)} RLO`}
+                : `~${(quote.rloOut || 0) >= 0.0001 ? (quote.rloOut || 0).toFixed(4) : (quote.rloOut || 0).toExponential(2)} RLO`}
             </span>
           </div>
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>Platform fee (1%)</span>
-            <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>{formatRlo(quote.fee)} RLO</span>
+            <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>
+              {formatRlo(quote.fee)} RLO
+            </span>
           </div>
           {(quote.creatorTax ?? 0) > 0 && (
             <div className="flex justify-between text-xs">
@@ -196,7 +267,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>Price per token</span>
             <span className="font-medium tabular-nums" style={{ color: "var(--ink)" }}>
-              {formatRlo(quote.price * 1_000_000_000, 8)} RLO
+              {(quote.currentPrice || 0).toExponential(3)} RLO
             </span>
           </div>
         </div>
@@ -208,7 +279,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
           <CheckCircle2 size={16} style={{ color: "var(--success)" }} />
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold" style={{ color: "var(--success)" }}>
-              {isReal ? "Confirmed onchain" : "Recorded (devnet sim)"}
+              {isReal ? "Confirmed onchain" : "Submitted to devnet"}
             </p>
             {isReal ? (
               <a
@@ -221,7 +292,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
                 {txHash.slice(0, 20)}… <ExternalLink size={10} />
               </a>
             ) : (
-              <p className="text-xs mono truncate" style={{ color: "var(--muted)" }}>{txHash}</p>
+              <p className="text-xs mono truncate" style={{ color: "var(--muted)" }}>{txHash.slice(0, 24)}…</p>
             )}
           </div>
         </div>

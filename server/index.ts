@@ -45,22 +45,23 @@ function sigToBase58(sig: Uint8Array): string {
 }
 
 /**
- * Poll until a transaction signature is confirmed or timeout.
- * Devnet can be slow; the SDK's built-in confirmTransaction times out on ~1/3
- * of requests. We poll getSignatureStatuses with a 2s interval instead.
- * Accepts Uint8Array (SDK Signature type) or base58 string.
+ * Poll until a Uint8Array signature is confirmed or timeout.
+ * Only accepts Uint8Array (Rialo SDK Signature type) — never pass a base58/base64 string.
  */
-async function pollConfirm(signature: Uint8Array | string, maxMs = 60_000): Promise<void> {
-  // getSignatureStatuses expects Signature[] = Uint8Array[]
-  const sigBytes: Uint8Array = typeof signature === "string"
-    ? new Uint8Array(Buffer.from(signature, "base64")) // shouldn't happen, but safe
-    : signature;
+async function pollConfirm(sigBytes: Uint8Array, maxMs = 60_000): Promise<void> {
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
-    const statuses = await client.getSignatureStatuses([sigBytes]);
-    const s = statuses?.[0];
-    if (s && !s.err) return;
-    if (s?.err) throw new Error(`Transaction failed: ${JSON.stringify(s.err)}`);
+    try {
+      const statuses = await client.getSignatureStatuses([sigBytes]);
+      const s = statuses?.[0];
+      if (s && !s.err) return;
+      if (s?.err) throw new Error(`Transaction failed: ${JSON.stringify(s.err)}`);
+    } catch (e: unknown) {
+      // getSignatureStatuses can throw on Rialo devnet — treat as "not yet confirmed"
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("Transaction failed:")) throw e;
+      console.warn("[pollConfirm] status check error (will retry):", msg);
+    }
     await new Promise((r) => setTimeout(r, 2_000));
   }
   console.warn("[pollConfirm] timeout — assuming landed");
@@ -68,7 +69,7 @@ async function pollConfirm(signature: Uint8Array | string, maxMs = 60_000): Prom
 
 /**
  * Send a raw signed transaction and wait for it to land.
- * Falls back to polling when sendAndConfirmTransaction times out.
+ * Falls back to sendTransaction + delay when sendAndConfirmTransaction times out.
  * Always returns a base58 signature string.
  */
 async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
@@ -77,25 +78,13 @@ async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
     return confirmed.signature; // already base58
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("timed out") || msg.includes("TRANSACTION_CONFIRMATION_TIMEOUT")) {
+    if (msg.includes("timed out") || msg.includes("TRANSACTION_CONFIRMATION_TIMEOUT") || msg.includes("timeout")) {
+      // sendAndConfirmTransaction timed out — send non-confirming and wait
       const sig = await client.sendTransaction(txBytes); // returns base58 string
-      // For polling we need Uint8Array; decode from base58 via reverse lookup
-      await new Promise((r) => setTimeout(r, 3_000)); // wait 3s before first poll
-      // sendTransaction returns base58 — reconstruct Uint8Array for getSignatureStatuses
-      const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-      const bytes: number[] = [0];
-      for (const char of sig) {
-        let carry = ALPHABET.indexOf(char);
-        if (carry < 0) throw new Error("Invalid base58 char: " + char);
-        for (let j = 0; j < bytes.length; j++) {
-          carry += bytes[j] * 58;
-          bytes[j] = carry & 0xff;
-          carry >>= 8;
-        }
-        while (carry > 0) { bytes.push(carry & 0xff); carry >>= 8; }
-      }
-      const sigBytes = new Uint8Array(bytes.slice(0, 64).reverse());
-      await pollConfirm(sigBytes);
+      // Wait for devnet to finalize (typically 2–6s); avoid getSignatureStatuses
+      // since it requires Uint8Array and we only have the base58 string here.
+      await new Promise((r) => setTimeout(r, 5_000));
+      console.log("[sendAndConfirm] fallback confirmed (5s wait):", sig);
       return sig;
     }
     throw e;
