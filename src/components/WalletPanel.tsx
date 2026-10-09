@@ -52,7 +52,7 @@ function ExtensionOption({ onClose }: { onClose: () => void }) {
         target="_blank"
         rel="noopener noreferrer"
         className="w-full flex items-center gap-3 py-3 px-4 rounded-xl transition-all"
-        style={{ background: "rgba(18,45,69,0.06)", color: "var(--ink-2)" }}
+        style={{ background: "var(--surface)", color: "var(--ink-2)" }}
       >
         <Puzzle size={16} />
         <div className="flex-1 text-left">
@@ -75,7 +75,7 @@ function ExtensionOption({ onClose }: { onClose: () => void }) {
           }}
           disabled={isPending}
           className="w-full flex items-center gap-3 py-3 px-4 rounded-xl transition-all active:scale-[0.98]"
-          style={{ background: "rgba(18,45,69,0.06)", color: "var(--ink)" }}
+          style={{ background: "var(--surface)", color: "var(--ink)" }}
         >
           {w.icon
             ? <img src={w.icon} alt={w.name} width={20} height={20} className="rounded-md" />
@@ -141,7 +141,7 @@ export function WalletPanel({
     return (
       <GlassCard className="p-4">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(18,45,69,0.08)" }}>
+          <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "var(--surface-strong)" }}>
             <Wallet size={18} style={{ color: "var(--ink)" }} />
           </div>
           <div>
@@ -172,7 +172,7 @@ export function WalletPanel({
           <button
             onClick={onConnectPlayground}
             className="w-full flex items-center gap-3 py-2.5 px-4 rounded-xl text-sm font-semibold transition-all active:scale-[0.98]"
-            style={{ background: "rgba(18,45,69,0.08)", color: "var(--ink)" }}
+            style={{ background: "var(--surface-strong)", color: "var(--ink)" }}
           >
             <Globe size={15} />
             Web Wallet (Playground)
@@ -184,7 +184,7 @@ export function WalletPanel({
               onClick={() => { onGenerate(); setShowOptions(false); }}
               disabled={loading}
               className="w-full flex items-center gap-3 py-2.5 px-4 rounded-xl text-sm font-medium transition-all active:scale-[0.98]"
-              style={{ background: "rgba(18,45,69,0.06)", color: "var(--ink-2)" }}
+              style={{ background: "var(--surface)", color: "var(--ink-2)" }}
             >
               <KeyRound size={15} />
               {loading ? "Generating…" : "Generate In-Browser Wallet"}
@@ -207,7 +207,7 @@ export function WalletPanel({
               value={importValue}
               onChange={(e) => setImportValue(e.target.value)}
               className="w-full px-3 py-2 rounded-lg text-xs font-mono outline-none"
-              style={{ background: "rgba(18,45,69,0.06)", border: "1px solid var(--border)", color: "var(--ink)" }}
+              style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
             />
             <button
               onClick={handleImport}
@@ -266,7 +266,7 @@ export function WalletPanel({
         onClick={() => { setOpen(!open); void onRefreshBalance(); }}
       >
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "rgba(18,45,69,0.08)" }}>
+          <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "var(--surface-strong)" }}>
             <Wallet size={16} style={{ color: "var(--ink)" }} />
           </div>
           <div className="text-left">
@@ -275,7 +275,7 @@ export function WalletPanel({
                 {shortenAddress(activeWallet.pubkey, 6)}
               </p>
               <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full"
-                style={{ background: "rgba(18,45,69,0.06)", color: "var(--muted)" }}>
+                style={{ background: "var(--surface)", color: "var(--muted)" }}>
                 {walletTypeIcon}
                 <span className="ml-0.5">{walletTypeLabel}</span>
               </span>
@@ -364,7 +364,7 @@ export function WalletPanel({
           <button
             onClick={onDisconnect}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-medium transition-all"
-            style={{ background: "rgba(18,45,69,0.05)", color: "var(--muted)" }}
+            style={{ background: "var(--surface)", color: "var(--muted)" }}
           >
             <LogOut size={13} /> Disconnect
           </button>

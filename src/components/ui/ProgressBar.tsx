@@ -24,7 +24,7 @@ export function ProgressBar({ value, label, graduated, className }: ProgressBarP
       )}
       <div
         className="h-1.5 rounded-full overflow-hidden"
-        style={{ background: "rgba(18,45,69,0.08)" }}
+        style={{ background: "var(--surface-strong)" }}
       >
         <div
           className="h-full rounded-full transition-all duration-500"

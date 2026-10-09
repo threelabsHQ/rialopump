@@ -58,11 +58,11 @@ export function BondingChart({ token, trades = [] }: BondingChartProps) {
     <div
       className="rounded-2xl overflow-hidden"
       style={{
-        background: "rgba(255,255,255,0.64)",
+        background: "#1a2d4a",
         backdropFilter: "blur(24px) saturate(180%)",
         WebkitBackdropFilter: "blur(24px) saturate(180%)",
-        border: "1px solid rgba(255,255,255,0.68)",
-        boxShadow: "0 8px 32px rgba(18,45,69,0.08)",
+        border: "1px solid var(--border-strong)",
+        boxShadow: "0 8px 32px var(--surface-strong)",
       }}
     >
       {/* Spectral strip */}
@@ -113,7 +113,7 @@ export function BondingChart({ token, trades = [] }: BondingChartProps) {
         ) : (
           <div
             className="h-12 rounded-xl flex items-center justify-center text-xs"
-            style={{ background: "rgba(18,45,69,0.04)", color: "var(--muted)" }}
+            style={{ background: "var(--surface-muted)", color: "var(--muted)" }}
           >
             No trades yet — be the first
           </div>
@@ -129,7 +129,7 @@ export function BondingChart({ token, trades = [] }: BondingChartProps) {
               {token.progressPct.toFixed(1)}%
             </span>
           </div>
-          <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(18,45,69,0.08)" }}>
+          <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-strong)" }}>
             <div
               className="h-full rounded-full transition-all duration-700"
               style={{

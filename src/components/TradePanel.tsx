@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { GlassCard, InnerField } from "./ui/GlassCard";
 import { api } from "../api";
 import type { Token, WalletState } from "../types";
-import { formatRlo } from "../utils/crypto";
 import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2, ExternalLink, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { clsx } from "clsx";
@@ -144,7 +143,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
   return (
     <GlassCard className="p-4 space-y-4">
       {/* Tab row */}
-      <div className="flex rounded-xl p-1" style={{ background: "rgba(18,45,69,0.06)" }}>
+      <div className="flex rounded-xl p-1" style={{ background: "var(--surface-muted)" }}>
         {(["buy", "sell"] as const).map((t) => (
           <button
             key={t}
@@ -191,7 +190,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
               key={q}
               onClick={() => setAmount(q.toString())}
               className="px-3 py-1 rounded-lg text-xs font-semibold transition-all active:scale-95"
-              style={{ background: "rgba(255,255,255,0.58)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.66)", color: "var(--ink-2)" }}
+              style={{ background: "var(--surface-strong)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
             >
               {q} RLO
             </button>
@@ -205,7 +204,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
               onClick={() => sellPct(pct)}
               disabled={tokenBalance <= 0}
               className="flex-1 py-1 rounded-lg text-xs font-semibold transition-all active:scale-95 disabled:opacity-40"
-              style={{ background: "rgba(255,255,255,0.58)", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.66)", color: "var(--ink-2)" }}
+              style={{ background: "var(--surface-strong)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
             >
               {pct}%
             </button>
@@ -239,7 +238,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
 
       {/* Quote */}
       {quote && (
-        <div className="rounded-xl p-3 space-y-1.5" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
+        <div className="rounded-xl p-3 space-y-1.5" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>{tab === "buy" ? "Tokens received" : "RLO received"}</span>
             <span className="font-semibold tabular-nums" style={{ color: "var(--ink)" }}>
@@ -251,7 +250,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>Platform fee (1%)</span>
             <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>
-              {formatRlo(quote.fee)} RLO
+              {(quote.fee ?? 0) >= 0.0001 ? (quote.fee ?? 0).toFixed(4) : (quote.fee ?? 0).toExponential(2)} RLO
             </span>
           </div>
           {(quote.creatorTax ?? 0) > 0 && (
@@ -260,7 +259,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
                 Creator tax ({((token.tokenTaxBps ?? 0) / 100).toFixed(1)}%)
               </span>
               <span className="font-medium tabular-nums" style={{ color: "var(--muted)" }}>
-                {formatRlo(quote.creatorTax ?? 0)} RLO
+                {(quote.creatorTax ?? 0) >= 0.0001 ? (quote.creatorTax ?? 0).toFixed(4) : (quote.creatorTax ?? 0).toExponential(2)} RLO
               </span>
             </div>
           )}

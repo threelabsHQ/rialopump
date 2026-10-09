@@ -77,7 +77,7 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
         <button
           onClick={onBack}
           className="w-9 h-9 rounded-xl flex items-center justify-center transition-all active:scale-95"
-          style={{ background: "rgba(255,255,255,0.64)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.68)" }}
+          style={{ background: "var(--surface)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", border: "1px solid var(--border)" }}
         >
           <ArrowLeft size={16} style={{ color: "var(--ink)" }} />
         </button>
@@ -86,7 +86,7 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="display text-base font-bold" style={{ color: "var(--ink)" }}>{token.name}</span>
-              <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: "rgba(18,45,69,0.08)", color: "var(--ink-2)" }}>
+              <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: "var(--surface-strong)", color: "var(--ink-2)" }}>
                 ${token.symbol}
               </span>
               {token.graduated && (
@@ -151,7 +151,7 @@ function TokenInfo({ token, trades }: { token: Token; trades: TradeRecord[] }) {
       )}
       <div className="grid grid-cols-2 gap-2">
         {stats.map((s) => (
-          <div key={s.label} className="rounded-xl p-3" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
+          <div key={s.label} className="rounded-xl p-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
             <p className="text-xs" style={{ color: "var(--muted)" }}>{s.label}</p>
             <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>{s.value}</p>
           </div>

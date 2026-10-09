@@ -173,6 +173,8 @@ const tokens: Map<string, TokenRecord> = loadTokens();
 // ─── Constants (must match program/src/state.rs) ─────────────────────────────
 // ALL internal math uses KELVIN. Convert RLO→kelvin at API entry points.
 const KELVIN_PER_RLO        = 1_000_000_000;
+// Devnet RLO→USD rate. Override via RLO_USD_RATE env var; replace with oracle on mainnet.
+const RLO_USD_RATE          = parseFloat(process.env.RLO_USD_RATE ?? "0.10");
 const TOTAL_SUPPLY          = 1_000_000_000;   // 1B tokens, all on curve
 const PHANTOM_RLO           = 30 * KELVIN_PER_RLO;   // 30 RLO virtual reserve
 const GRADUATION_RLO_TARGET = 85 * KELVIN_PER_RLO;   // 85 RLO
@@ -382,6 +384,8 @@ app.get("/tokens", async (_req, res) => {
         tradeCount: t.trades.length,
         currentPrice: kelvinToRlo(vs.currentPrice),      // RLO/token
         marketCap: t.marketCap,                           // RLO
+        priceUsd: kelvinToRlo(vs.currentPrice) * RLO_USD_RATE,
+        marketCapUsd: t.marketCap * RLO_USD_RATE,
         progressPct: Math.min(100, (rloRaisedKelvin / GRADUATION_RLO_TARGET) * 100),
         tokenTaxBps: t.tokenTaxBps || 0,
         creatorEarnings: t.creatorEarnings || 0,
@@ -412,6 +416,8 @@ app.get("/tokens/:id", async (req, res) => {
     tradeCount: t.trades.length,
     currentPrice: kelvinToRlo(state.currentPrice),           // RLO/token
     marketCap: t.marketCap,                                   // RLO
+    priceUsd: kelvinToRlo(state.currentPrice) * RLO_USD_RATE,
+    marketCapUsd: t.marketCap * RLO_USD_RATE,
     progressPct: Math.min(100, ((t.realRloRaised || state.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
     virtualRlo: kelvinToRlo(state.virtualRlo),                // RLO (for chart)
     realRloRaised: kelvinToRlo(t.realRloRaised || state.realRloRaised), // RLO
@@ -779,7 +785,7 @@ app.get("/portfolio/:pubkey", (req, res) => {
     const tokenBal = bought.reduce((s, tr) => s + tr.tokenAmount, 0) - sold.reduce((s, tr) => s + tr.tokenAmount, 0);
     if (tokenBal > 0) {
       const state = buildVirtualState(t);
-      const value = Math.round(state.currentPrice * tokenBal);
+      const value = kelvinToRlo(state.currentPrice) * tokenBal;
       const spent    = bought.reduce((s, tr) => s + tr.rloAmount, 0);
       const received = sold.reduce((s, tr) => s + tr.rloAmount, 0);
       const { trades: _trades, ...tokenWithoutTrades } = t;
@@ -798,4 +804,18 @@ app.post("/wallet/generate", (_req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`[rialo-launchpad] Server on :${PORT} | Program: ${PROGRAM_ID_STR}`);
+  // Sync all existing tokens from chain on boot so tokenSupply/marketCap are fresh
+  void (async () => {
+    const ids = [...tokens.keys()];
+    if (ids.length === 0) return;
+    console.log(`[rialo-launchpad] Syncing ${ids.length} token(s) from chain on boot…`);
+    let ok = 0;
+    for (const id of ids) {
+      const t = tokens.get(id);
+      if (t) {
+        try { await syncOnchainState(t); ok++; } catch { /* non-fatal */ }
+      }
+    }
+    console.log(`[rialo-launchpad] Boot sync complete: ${ok}/${ids.length} tokens updated`);
+  })();
 });

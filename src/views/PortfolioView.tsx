@@ -31,7 +31,7 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
   if (!wallet) {
     return (
       <GlassCard className="p-8 text-center">
-        <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3" style={{ background: "rgba(18,45,69,0.06)" }}>
+        <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3" style={{ background: "var(--surface)" }}>
           <Briefcase size={20} style={{ color: "var(--muted)" }} />
         </div>
         <p className="text-sm font-semibold" style={{ color: "var(--ink)" }}>No wallet connected</p>
@@ -108,7 +108,7 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
                       </span>
                     </div>
                     {/* Weight bar */}
-                    <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: "rgba(18,45,69,0.08)" }}>
+                    <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: "var(--surface-strong)" }}>
                       <div
                         className="h-full rounded-full"
                         style={{ width: `${pct}%`, background: "var(--accent)" }}

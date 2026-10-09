@@ -203,7 +203,7 @@ export function CreateTokenForm({ wallet, signTx, onCreated }: CreateTokenFormPr
         </div>
 
         {/* How it works */}
-        <div className="rounded-xl p-3 space-y-1" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
+        <div className="rounded-xl p-3 space-y-1" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
           <p className="text-xs font-semibold" style={{ color: "var(--ink-2)" }}>How it works</p>
           <ul className="text-xs space-y-0.5" style={{ color: "var(--muted)" }}>
             <li>• 1B total supply with x·y=k bonding curve pricing</li>

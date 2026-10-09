@@ -1,101 +1,116 @@
-import { GlassCard } from "./ui/GlassCard";
 import { ProgressBar } from "./ui/ProgressBar";
 import { TokenAvatar } from "./ui/TokenAvatar";
 import type { Token } from "../types";
 import { timeAgo } from "../utils/crypto";
-
+import { Zap } from "lucide-react";
 
 interface TokenCardProps {
   token: Token;
   onClick: () => void;
 }
 
+function fmtUsd(val: number): string {
+  if (val === 0) return "$0";
+  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
+  if (val >= 1_000)     return `$${(val / 1_000).toFixed(2)}K`;
+  if (val >= 0.01)      return `$${val.toFixed(2)}`;
+  if (val >= 0.000001)  return `$${val.toFixed(6)}`;
+  return `$${val.toExponential(2)}`;
+}
+
+function fmtPriceUsd(val: number): string {
+  if (val === 0) return "$0";
+  if (val >= 0.01)     return `$${val.toFixed(4)}`;
+  if (val >= 0.000001) return `$${val.toFixed(8)}`;
+  return `$${val.toExponential(2)}`;
+}
+
 export function TokenCard({ token, onClick }: TokenCardProps) {
-  // marketCap is already in RLO (server converts from kelvin before sending)
-  const mcapRlo = token.marketCap;
+  const priceUsd  = token.priceUsd  ?? 0;
+  const mcapUsd   = token.marketCapUsd ?? 0;
+  const rloRaised = token.realRloRaised ?? 0;
+  const gradTarget = token.graduationTarget ?? 85;
 
   return (
-    <GlassCard
+    <div
       onClick={onClick}
-      hover
-      className="p-4 flex flex-col gap-3"
+      className="rounded-2xl cursor-pointer transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] overflow-hidden"
+      style={{
+        background: "rgba(255,255,255,0.05)",
+        border: "1px solid rgba(255,255,255,0.09)",
+        boxShadow: "0 4px 24px rgba(0,0,0,0.20)",
+      }}
     >
-      {/* Header */}
-      <div className="flex items-start gap-3">
-        <TokenAvatar imageUrl={token.imageUrl} symbol={token.symbol} size={48} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="display text-sm font-bold truncate" style={{ color: "var(--ink)" }}>
-              {token.name}
-            </span>
-            <span
-              className="px-2 py-0.5 rounded-full text-xs font-semibold"
-              style={{ background: "rgba(18,45,69,0.08)", color: "var(--ink-2)" }}
-            >
-              ${token.symbol}
-            </span>
-            {token.graduated && (
-              <span
-                className="px-2 py-0.5 rounded-full text-xs font-semibold"
-                style={{ background: "rgba(26,128,71,0.12)", color: "var(--success)" }}
-              >
-                Graduated
+      {/* Top accent line */}
+      <div className="h-0.5 w-full" style={{ background: "linear-gradient(90deg, #4f9eff, #af8ff4, #f05c6b)" }} />
+
+      <div className="p-4 space-y-3">
+        {/* Header row */}
+        <div className="flex items-start gap-3">
+          <TokenAvatar imageUrl={token.imageUrl} symbol={token.symbol} size={44} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="display text-sm font-bold" style={{ color: "var(--ink)" }}>
+                {token.name}
               </span>
-            )}
+              <span className="px-1.5 py-0.5 rounded-md text-xs font-semibold"
+                style={{ background: "rgba(79,158,255,0.15)", color: "var(--accent)" }}>
+                ${token.symbol}
+              </span>
+              {token.graduated && (
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold"
+                  style={{ background: "rgba(52,210,122,0.15)", color: "var(--success)" }}>
+                  <Zap size={10} /> Graduated
+                </span>
+              )}
+            </div>
+            <p className="text-xs mt-0.5 line-clamp-1" style={{ color: "var(--muted)" }}>
+              {token.description || "No description"}
+            </p>
           </div>
-          <p
-            className="text-xs mt-0.5 line-clamp-2"
-            style={{ color: "var(--muted)" }}
-          >
-            {token.description || "No description"}
-          </p>
+        </div>
+
+        {/* Stats row: 3 cols */}
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-xl px-2 py-2 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
+            <p className="text-xs mb-0.5" style={{ color: "var(--muted)" }}>Market Cap</p>
+            <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
+              {fmtUsd(mcapUsd)}
+            </p>
+          </div>
+          <div className="rounded-xl px-2 py-2 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
+            <p className="text-xs mb-0.5" style={{ color: "var(--muted)" }}>Price</p>
+            <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
+              {fmtPriceUsd(priceUsd)}
+            </p>
+          </div>
+          <div className="rounded-xl px-2 py-2 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
+            <p className="text-xs mb-0.5" style={{ color: "var(--muted)" }}>Trades</p>
+            <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
+              {token.tradeCount}
+            </p>
+          </div>
+        </div>
+
+        {/* Bonding curve progress */}
+        <ProgressBar
+          value={token.progressPct}
+          label="Bonding curve"
+          graduated={token.graduated}
+        />
+
+        {/* Footer */}
+        <div className="flex items-center justify-between text-xs" style={{ color: "var(--subtle)" }}>
+          <span>{timeAgo(token.createdAt)}</span>
+          {token.graduated ? (
+            <span className="font-semibold" style={{ color: "var(--success)" }}>Graduated 🎓</span>
+          ) : (
+            <span>
+              {rloRaised >= 0.001 ? rloRaised.toFixed(2) : rloRaised.toExponential(2)} / {gradTarget.toFixed(0)} RLO raised
+            </span>
+          )}
         </div>
       </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="text-center">
-          <p className="text-xs" style={{ color: "var(--muted)" }}>Mkt Cap</p>
-          <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
-            {mcapRlo >= 0.001 ? mcapRlo.toFixed(2) : "0"} RLO
-          </p>
-        </div>
-        <div className="text-center">
-          <p className="text-xs" style={{ color: "var(--muted)" }}>Price</p>
-          <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
-            {token.currentPrice > 0
-              ? token.currentPrice < 0.000001
-                ? token.currentPrice.toExponential(2)
-                : token.currentPrice.toFixed(6)
-              : "0"} RLO
-          </p>
-        </div>
-        <div className="text-center">
-          <p className="text-xs" style={{ color: "var(--muted)" }}>Trades</p>
-          <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
-            {token.tradeCount}
-          </p>
-        </div>
-      </div>
-
-      {/* Bonding curve progress */}
-      <ProgressBar
-        value={token.progressPct}
-        label="Bonding curve"
-        graduated={token.graduated}
-      />
-
-      {/* Footer: RLO raised / graduation target */}
-      <div className="flex items-center justify-between text-xs" style={{ color: "var(--subtle)" }}>
-        <span>{timeAgo(token.createdAt)}</span>
-        {token.graduated ? (
-          <span style={{ color: "var(--success)" }}>Graduated</span>
-        ) : (
-          <span>
-            {(token.realRloRaised ?? 0).toFixed(2)} / {(token.graduationTarget ?? 85).toFixed(0)} RLO raised
-          </span>
-        )}
-      </div>
-    </GlassCard>
+    </div>
   );
 }

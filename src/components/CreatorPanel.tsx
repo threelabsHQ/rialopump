@@ -84,18 +84,18 @@ export function CreatorPanel({ token, wallet, signTx, onRefresh }: CreatorPanelP
       <div className="flex items-center gap-2">
         <div
           className="w-7 h-7 rounded-lg flex items-center justify-center"
-          style={{ background: "rgba(18,45,69,0.08)" }}
+          style={{ background: "var(--surface-strong)" }}
         >
           <TrendingUp size={14} style={{ color: "var(--accent)" }} />
         </div>
         <h3 className="text-sm font-bold" style={{ color: "var(--ink)" }}>Creator Dashboard</h3>
-        <span className="ml-auto text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: "rgba(18,45,69,0.07)", color: "var(--ink-2)" }}>
+        <span className="ml-auto text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: "var(--surface-strong)", color: "var(--ink-2)" }}>
           Only you see this
         </span>
       </div>
 
       {/* Earnings */}
-      <div className="rounded-xl p-3 space-y-2" style={{ background: "rgba(18,45,69,0.04)", border: "1px solid var(--border)" }}>
+      <div className="rounded-xl p-3 space-y-2" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>Unclaimed Earnings</span>
           <span className="text-sm font-bold tabular-nums" style={{ color: earningsKelvin > 0 ? "var(--success)" : "var(--muted)" }}>
@@ -116,7 +116,7 @@ export function CreatorPanel({ token, wallet, signTx, onRefresh }: CreatorPanelP
             "w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98]",
             (claimBusy || earningsKelvin === 0) && "opacity-50 cursor-not-allowed"
           )}
-          style={{ background: earningsKelvin > 0 ? "var(--success)" : "rgba(18,45,69,0.06)", color: earningsKelvin > 0 ? "white" : "var(--muted)" }}
+          style={{ background: earningsKelvin > 0 ? "var(--success)" : "var(--surface)", color: earningsKelvin > 0 ? "white" : "var(--muted)" }}
         >
           {claimBusy ? <Loader2 size={14} className="animate-spin" /> : <DollarSign size={14} />}
           {claimBusy ? "Claiming…" : earningsKelvin === 0 ? "No earnings yet" : `Claim ${earningsRlo.toFixed(4)} RLO`}

@@ -19,11 +19,11 @@ export function GlassCard({ children, className, style, onClick, hover }: GlassC
         className
       )}
       style={{
-        background: "rgba(255,255,255,0.64)",
-        backdropFilter: "blur(24px) saturate(180%)",
-        WebkitBackdropFilter: "blur(24px) saturate(180%)",
-        border: "1px solid rgba(255,255,255,0.68)",
-        boxShadow: "0 8px 32px rgba(18,45,69,0.08), inset 0 1px 0 rgba(255,255,255,0.55)",
+        background: "var(--surface)",
+        backdropFilter: "blur(24px) saturate(160%)",
+        WebkitBackdropFilter: "blur(24px) saturate(160%)",
+        border: "1px solid var(--border)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.06)",
         ...style,
       }}
     >
@@ -37,8 +37,8 @@ export function InnerField({ children, className, style }: { children: React.Rea
     <div
       className={clsx("rounded-xl", className)}
       style={{
-        background: "rgba(255,255,255,0.46)",
-        border: "1px solid rgba(255,255,255,0.56)",
+        background: "var(--surface-muted)",
+        border: "1px solid var(--border)",
         ...style,
       }}
     >

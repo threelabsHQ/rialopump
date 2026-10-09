@@ -10,8 +10,10 @@ export interface Token {
   totalSupply: number;
   graduated: boolean;
   tradeCount: number;
-  currentPrice: number;
-  marketCap: number;
+  currentPrice: number;    // RLO / token
+  marketCap: number;       // RLO
+  priceUsd: number;        // USD / token
+  marketCapUsd: number;    // USD
   progressPct: number;
   virtualRlo?: number;
   trades?: TradeRecord[];
