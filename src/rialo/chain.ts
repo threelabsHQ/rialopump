@@ -74,7 +74,7 @@ export async function signAndSend(
   signer: Keypair
 ): Promise<string> {
   const configHashPrefix = await getConfigHashPrefix();
-  const tx = buildTx(instructions, signer.publicKey, configHashPrefix, configHashPrefix);
+  const tx = buildTx(instructions, signer.publicKey, configHashPrefix);
   tx.sign(signer);
   const txBase64 = Buffer.from(tx.serialize()).toString("base64");
   const { signature } = await serverReq<{ signature: string }>("/rpc/send-tx", { txBase64 });
@@ -88,7 +88,7 @@ export async function buildSignedTxBytes(
   signer: Keypair
 ): Promise<string> {
   const configHashPrefix = await getConfigHashPrefix();
-  const tx = buildTx(instructions, signer.publicKey, configHashPrefix, configHashPrefix);
+  const tx = buildTx(instructions, signer.publicKey, configHashPrefix);
   tx.sign(signer);
   return Buffer.from(tx.serialize()).toString("base64");
 }

@@ -303,6 +303,8 @@ function encodeUpdateTokenTax(tokenId: Uint8Array, newTaxBps: bigint): Uint8Arra
 // ─── Transaction builder helper ───────────────────────────────────────────────
 
 interface TxBuilderLike {
+  setPayer(payer: PublicKey): TxBuilderLike;
+  setValidFrom(v: bigint): TxBuilderLike;
   addInstruction(ix: RialoInstruction): TxBuilderLike;
   setConfigHashPrefix(v: bigint): TxBuilderLike;
   build(): Transaction;
@@ -314,20 +316,23 @@ function makeTxBuilder(): TxBuilderLike {
 }
 
 /**
- * Build a signed Transaction from a list of instructions.
- * `feePayer` is the public key that pays the transaction fee.
- * `validFrom` and `configHashPrefix` are both set from `client.getConfigHashPrefix()`.
+ * Build a Transaction from a list of instructions.
+ * - setPayer: the account paying the tx fee
+ * - setValidFrom: current time in ms since Unix epoch (timestamp-based replay protection)
+ * - setConfigHashPrefix: from client.getConfigHashPrefix() (epoch-level chain ID)
  */
 export function buildTx(
   instructions: RialoInstruction[],
   feePayer: PublicKey,
-  validFrom: bigint,
   configHashPrefix: bigint,
+  validFromMs?: bigint,
 ): Transaction {
-  let builder = makeTxBuilder();
+  const validFrom = validFromMs ?? BigInt(Date.now());
+  let builder = makeTxBuilder()
+    .setPayer(feePayer)
+    .setValidFrom(validFrom)
+    .setConfigHashPrefix(configHashPrefix);
   for (const ix of instructions) builder = builder.addInstruction(ix);
-  builder = builder.setConfigHashPrefix(validFrom);
-  void feePayer; void configHashPrefix; // feePayer embedded by Keypair.sign; configHashPrefix = validFrom
   return builder.build();
 }
 

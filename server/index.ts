@@ -18,37 +18,84 @@ const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "CDy4MtWvAJyLfQBU4TLK7ZDDa
 const client: RialoClient = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
 
 /**
+ * Encode a Uint8Array signature to base58.
+ * Rialo's Signature type = Uint8Array; RPC wire format is base58 string.
+ * We use PublicKey.fromBytes (which internally uses the same bs58 encoder)
+ * to convert 32-byte chunks, but signatures are 64 bytes so we encode directly
+ * via the SDK's internal base58 by round-tripping through a known path.
+ */
+function sigToBase58(sig: Uint8Array): string {
+  // The SDK's PublicKey wraps a 32-byte key but its toString() uses bs58.
+  // For a 64-byte signature we fall back to a manual base58 implementation.
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const digits: number[] = [0];
+  for (const byte of sig) {
+    let carry = byte;
+    for (let j = 0; j < digits.length; j++) {
+      carry += digits[j] << 8;
+      digits[j] = carry % 58;
+      carry = Math.floor(carry / 58);
+    }
+    while (carry > 0) { digits.push(carry % 58); carry = Math.floor(carry / 58); }
+  }
+  let result = "";
+  for (let k = 0; k < sig.length - 1 && sig[k] === 0; k++) result += "1";
+  for (let k = digits.length - 1; k >= 0; k--) result += ALPHABET[digits[k]];
+  return result;
+}
+
+/**
  * Poll until a transaction signature is confirmed or timeout.
  * Devnet can be slow; the SDK's built-in confirmTransaction times out on ~1/3
  * of requests. We poll getSignatureStatuses with a 2s interval instead.
+ * Accepts Uint8Array (SDK Signature type) or base58 string.
  */
-async function pollConfirm(signature: string, maxMs = 60_000): Promise<void> {
+async function pollConfirm(signature: Uint8Array | string, maxMs = 60_000): Promise<void> {
+  // getSignatureStatuses expects Signature[] = Uint8Array[]
+  const sigBytes: Uint8Array = typeof signature === "string"
+    ? new Uint8Array(Buffer.from(signature, "base64")) // shouldn't happen, but safe
+    : signature;
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
-    const statuses = await client.getSignatureStatuses([signature]);
+    const statuses = await client.getSignatureStatuses([sigBytes]);
     const s = statuses?.[0];
     if (s && !s.err) return;
     if (s?.err) throw new Error(`Transaction failed: ${JSON.stringify(s.err)}`);
     await new Promise((r) => setTimeout(r, 2_000));
   }
-  // Best-effort: if we timed out but had no error, assume it landed
-  console.warn("[pollConfirm] timeout for", signature, "— assuming landed");
+  console.warn("[pollConfirm] timeout — assuming landed");
 }
 
 /**
  * Send a raw signed transaction and wait for it to land.
  * Falls back to polling when sendAndConfirmTransaction times out.
+ * Always returns a base58 signature string.
  */
 async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
   try {
     const confirmed = await client.sendAndConfirmTransaction(txBytes);
-    return confirmed.signature;
+    return confirmed.signature; // already base58
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("timed out") || msg.includes("TRANSACTION_CONFIRMATION_TIMEOUT")) {
-      // Re-send and poll manually
-      const sig = await client.sendTransaction(txBytes);
-      await pollConfirm(sig);
+      const sig = await client.sendTransaction(txBytes); // returns base58 string
+      // For polling we need Uint8Array; decode from base58 via reverse lookup
+      await new Promise((r) => setTimeout(r, 3_000)); // wait 3s before first poll
+      // sendTransaction returns base58 — reconstruct Uint8Array for getSignatureStatuses
+      const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+      const bytes: number[] = [0];
+      for (const char of sig) {
+        let carry = ALPHABET.indexOf(char);
+        if (carry < 0) throw new Error("Invalid base58 char: " + char);
+        for (let j = 0; j < bytes.length; j++) {
+          carry += bytes[j] * 58;
+          bytes[j] = carry & 0xff;
+          carry >>= 8;
+        }
+        while (carry > 0) { bytes.push(carry & 0xff); carry >>= 8; }
+      }
+      const sigBytes = new Uint8Array(bytes.slice(0, 64).reverse());
+      await pollConfirm(sigBytes);
       return sig;
     }
     throw e;
@@ -56,12 +103,13 @@ async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
 }
 
 /**
- * Airdrop and confirm with manual polling (requestAirdropAndConfirm times out on devnet).
+ * Airdrop and confirm with manual polling.
+ * requestAirdrop returns Signature (Uint8Array); convert to base58 for API response.
  */
 async function airdropAndConfirm(pk: PublicKey, kelvin: bigint): Promise<string> {
-  const sig = await client.requestAirdrop(pk, kelvin);
-  await pollConfirm(sig);
-  return sig;
+  const sigBytes = await client.requestAirdrop(pk, kelvin); // Uint8Array
+  await pollConfirm(sigBytes);
+  return sigToBase58(sigBytes);
 }
 
 // ─── Deployer keypair (optional) ──────────────────────────────────────────────
@@ -134,27 +182,29 @@ function saveTokens(tokens: Map<string, TokenRecord>) {
 const tokens: Map<string, TokenRecord> = loadTokens();
 
 // ─── Constants (must match program/src/state.rs) ─────────────────────────────
-const KELVIN_PER_RLO      = 1_000_000_000;
-const TOTAL_SUPPLY        = 1_000_000_000;   // all tokens start on curve
-/** Phantom reserve — sets opening price. virtual_rlo starts here. */
-const PHANTOM_RLO         = 30 * KELVIN_PER_RLO;
-/** Graduation threshold in kelvin (85 RLO on devnet). */
-const GRADUATION_RLO_TARGET = 85 * KELVIN_PER_RLO;
-const PLATFORM_FEE_BPS    = 100;
-/** Creation fee (0.02 RLO) — for balance check at creation time. */
-const CREATION_FEE_KELVIN = 20_000_000;
+// ALL internal math uses KELVIN. Convert RLO→kelvin at API entry points.
+const KELVIN_PER_RLO        = 1_000_000_000;
+const TOTAL_SUPPLY          = 1_000_000_000;   // 1B tokens, all on curve
+const PHANTOM_RLO           = 30 * KELVIN_PER_RLO;   // 30 RLO virtual reserve
+const GRADUATION_RLO_TARGET = 85 * KELVIN_PER_RLO;   // 85 RLO
+const PLATFORM_FEE_BPS      = 100;                    // 1%
 
-// ─── Bonding curve math ───────────────────────────────────────────────────────
+/** Convert RLO float → kelvin integer (round to nearest). */
+function rloToKelvin(rlo: number): number { return Math.round(rlo * KELVIN_PER_RLO); }
+/** Convert kelvin → RLO float. */
+function kelvinToRlo(k: number): number { return k / KELVIN_PER_RLO; }
 
-/** Constant-product buy. Returns tokens_out using floating-point (server-side). */
-function calcBuyTokens(rloIn: number, virtualRlo: number, virtualTokens: number) {
+// ─── Bonding curve math (all amounts in KELVIN) ───────────────────────────────
+
+/** Constant-product buy. rloIn in kelvin → tokens out. */
+function calcBuyTokens(rloInKelvin: number, virtualRlo: number, virtualTokens: number) {
   const k = virtualRlo * virtualTokens;
-  const newVr = virtualRlo + rloIn;
+  const newVr = virtualRlo + rloInKelvin;
   const newVt = k / newVr;
   return { tokensOut: Math.floor(virtualTokens - newVt), newVr, newVt };
 }
 
-/** Constant-product sell. Returns rlo_out before fees. */
+/** Constant-product sell. tokensIn → rlo out in kelvin before fees. */
 function calcSellRlo(tokensIn: number, virtualRlo: number, virtualTokens: number) {
   const k = virtualRlo * virtualTokens;
   const newVt = virtualTokens + tokensIn;
@@ -163,19 +213,28 @@ function calcSellRlo(tokensIn: number, virtualRlo: number, virtualTokens: number
 }
 
 /**
- * Reconstruct current virtual state by replaying trades.
- * virtual_rlo starts at PHANTOM_RLO; virtual_tokens starts at TOTAL_SUPPLY.
- * Also tracks realRloRaised for graduation progress.
+ * Virtual state from onchain read (preferred) or trade replay (fallback).
+ * When onchain state has been synced into t.realRloRaised / t.tokenSupply,
+ * reconstruct reserves directly from those; otherwise replay t.trades.
+ * ALL values in kelvin.
  */
 function buildVirtualState(t: TokenRecord) {
+  // If onchain sync populated realRloRaised, derive reserves from it directly.
+  if (t.onchain && t.realRloRaised > 0) {
+    const vRlo    = PHANTOM_RLO + t.realRloRaised;
+    const vTokens = TOTAL_SUPPLY - t.tokenSupply;
+    const currentPrice = vTokens > 0 ? vRlo / vTokens : 0;
+    return { virtualRlo: vRlo, virtualTokens: vTokens, currentPrice, realRloRaised: t.realRloRaised };
+  }
+  // Fallback: replay trades. trade.rloAmount stored in kelvin.
   let vRlo    = PHANTOM_RLO;
   let vTokens = TOTAL_SUPPLY;
   let realRloRaised = 0;
   for (const trade of t.trades) {
     const taxBps = t.tokenTaxBps || 0;
     if (trade.type === "buy") {
-      const fee = Math.floor(trade.rloAmount * PLATFORM_FEE_BPS / 10_000);
-      const tax = Math.floor(trade.rloAmount * taxBps / 10_000);
+      const fee  = Math.floor(trade.rloAmount * PLATFORM_FEE_BPS / 10_000);
+      const tax  = Math.floor(trade.rloAmount * taxBps / 10_000);
       const into = trade.rloAmount - fee - tax;
       const r = calcBuyTokens(into, vRlo, vTokens);
       vRlo = r.newVr; vTokens = r.newVt;
@@ -331,7 +390,7 @@ app.get("/tokens", async (_req, res) => {
         totalSupply: t.totalSupply,
         graduated: t.graduated,
         tradeCount: t.trades.length,
-        currentPrice: vs.currentPrice,
+        currentPrice: kelvinToRlo(vs.currentPrice),
         marketCap: t.marketCap,
         progressPct: Math.min(100, (rloRaised / GRADUATION_RLO_TARGET) * 100),
         tokenTaxBps: t.tokenTaxBps || 0,
@@ -361,7 +420,7 @@ app.get("/tokens/:id", async (req, res) => {
     totalSupply: t.totalSupply,
     graduated: t.graduated,
     tradeCount: t.trades.length,
-    currentPrice: state.currentPrice,
+    currentPrice: kelvinToRlo(state.currentPrice),
     marketCap: t.marketCap,
     progressPct: Math.min(100, ((t.realRloRaised || state.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
     virtualRlo: state.virtualRlo,
@@ -410,12 +469,9 @@ app.post("/tokens", async (req, res) => {
       return res.status(400).json({ error: "Invalid creator pubkey" });
     }
 
-    const balance = await client.getBalance(pk);
-    // Must cover creation fee (0.02 RLO) + rent for PDA + first buy overhead
-    const minRequired = BigInt(CREATION_FEE_KELVIN + Math.round(0.05 * KELVIN_PER_RLO));
-    if (balance < minRequired) {
-      return res.status(400).json({ error: "Insufficient balance — need at least 0.07 RLO to launch." });
-    }
+    // Note: no pre-flight balance check — devnet airdrop confirmation can lag
+    // behind the request. The program rejects the tx if balance is truly insufficient.
+    void pk; // pk validated above, used for balance reads post-confirm only
 
     let txHash = "";
     let onchain = false;
@@ -463,52 +519,61 @@ app.post("/tokens", async (req, res) => {
 });
 
 // ─── Quote buy ────────────────────────────────────────────────────────────────
-app.post("/tokens/:id/quote-buy", (req, res) => {
+// rloAmount in request is RLO (float). Convert to kelvin for curve math.
+// Accepts GET (?rloAmount=) and POST ({ rloAmount }).
+app.get("/tokens/:id/quote-buy", handleQuoteBuy);
+app.post("/tokens/:id/quote-buy", express.json(), handleQuoteBuy);
+function handleQuoteBuy(req: express.Request, res: express.Response) {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
   if (t.graduated) return res.status(400).json({ error: "Token graduated" });
-  const { rloAmount } = req.body as { rloAmount?: number };
-  if (!rloAmount || rloAmount <= 0) return res.status(400).json({ error: "rloAmount required (kelvin)" });
+  const rloFloat = Number(
+    (req.body as { rloAmount?: number })?.rloAmount ?? req.query.rloAmount
+  );
+  if (!rloFloat || rloFloat <= 0) return res.status(400).json({ error: "rloAmount required" });
 
+  const rloKelvin = rloToKelvin(rloFloat);
   const state = buildVirtualState(t);
   const taxBps = t.tokenTaxBps || 0;
-  const platformFee = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10_000);
-  const creatorTax  = Math.floor(rloAmount * taxBps / 10_000);
-  const rloAfter    = rloAmount - platformFee - creatorTax;
+  const platformFee = Math.floor(rloKelvin * PLATFORM_FEE_BPS / 10_000);
+  const creatorTax  = Math.floor(rloKelvin * taxBps / 10_000);
+  const rloAfter    = rloKelvin - platformFee - creatorTax;
 
   const { tokensOut } = calcBuyTokens(rloAfter, state.virtualRlo, state.virtualTokens);
   const available = TOTAL_SUPPLY - t.tokenSupply;
   const limited = Math.min(tokensOut, available);
   res.json({
     tokensOut: limited,
-    fee: platformFee,
-    creatorTax,
-    price: rloAmount / Math.max(limited, 1),
-    currentPrice: state.currentPrice,
+    fee: kelvinToRlo(platformFee),
+    creatorTax: kelvinToRlo(creatorTax),
+    price: limited > 0 ? rloFloat / limited : 0,
+    currentPrice: kelvinToRlo(state.currentPrice),
   });
-});
+}
 
 // ─── Quote sell ───────────────────────────────────────────────────────────────
-app.post("/tokens/:id/quote-sell", (req, res) => {
+// Accepts both GET (?tokenAmount=) and POST ({ tokenAmount }).
+// rloOut returned in RLO (float) for display.
+app.get("/tokens/:id/quote-sell", (req, res) => {
   const t = tokens.get(req.params.id);
   if (!t) return res.status(404).json({ error: "Token not found" });
   if (t.graduated) return res.status(400).json({ error: "Token graduated" });
-  const { tokenAmount } = req.body as { tokenAmount?: number };
-  if (!tokenAmount || tokenAmount <= 0) return res.status(400).json({ error: "tokenAmount required" });
+  const tokenAmount = Number(req.query.tokenAmount);
+  if (!tokenAmount || tokenAmount <= 0) return res.status(400).json({ error: "tokenAmount query param required" });
 
   const state = buildVirtualState(t);
   const taxBps = t.tokenTaxBps || 0;
-  const { rloOut: rloGross } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
-  const platformFee = Math.floor(rloGross * PLATFORM_FEE_BPS / 10_000);
-  const creatorTax  = Math.floor(rloGross * taxBps / 10_000);
-  const rloAfterFee = rloGross - platformFee - creatorTax;
+  const { rloOut: rloGrossK } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
+  const platformFee = Math.floor(rloGrossK * PLATFORM_FEE_BPS / 10_000);
+  const creatorTax  = Math.floor(rloGrossK * taxBps / 10_000);
+  const rloAfterFeeK = rloGrossK - platformFee - creatorTax;
 
   res.json({
-    rloOut: rloAfterFee,
-    fee: platformFee,
-    creatorTax,
-    price: rloAfterFee / Math.max(tokenAmount, 1),
-    currentPrice: state.currentPrice,
+    rloOut: kelvinToRlo(rloAfterFeeK),
+    fee: kelvinToRlo(platformFee),
+    creatorTax: kelvinToRlo(creatorTax),
+    price: rloAfterFeeK > 0 ? kelvinToRlo(rloAfterFeeK) / tokenAmount : 0,
+    currentPrice: kelvinToRlo(state.currentPrice),
   });
 });
 
@@ -519,10 +584,12 @@ app.post("/tokens/:id/buy", async (req, res) => {
     if (!t) return res.status(404).json({ error: "Token not found" });
     if (t.graduated) return res.status(400).json({ error: "Token graduated" });
 
-    const { trader, rloAmount, signedTxBase64 } = req.body as {
+    const { trader, rloAmount: rloFloat, signedTxBase64 } = req.body as {
       trader?: string; rloAmount?: number; signedTxBase64?: string;
     };
-    if (!trader || !rloAmount) return res.status(400).json({ error: "trader and rloAmount required" });
+    if (!trader || !rloFloat) return res.status(400).json({ error: "trader and rloAmount required" });
+    // Convert RLO → kelvin for all internal math
+    const rloKelvin = rloToKelvin(rloFloat);
 
     let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 16);
     let onchain = false;
@@ -538,7 +605,7 @@ app.post("/tokens/:id/buy", async (req, res) => {
     } else {
       const pk = PublicKey.fromString(trader);
       const balance = await client.getBalance(pk);
-      if (Number(balance) < rloAmount) {
+      if (Number(balance) < rloKelvin) {
         return res.status(400).json({ error: "Insufficient RLO balance" });
       }
     }
@@ -546,9 +613,9 @@ app.post("/tokens/:id/buy", async (req, res) => {
     if (onchain) await syncOnchainState(t);
     const state    = buildVirtualState(t);
     const taxBps   = t.tokenTaxBps || 0;
-    const fee      = Math.floor(rloAmount * PLATFORM_FEE_BPS / 10_000);
-    const tax      = Math.floor(rloAmount * taxBps / 10_000);
-    const into     = rloAmount - fee - tax;
+    const fee      = Math.floor(rloKelvin * PLATFORM_FEE_BPS / 10_000);
+    const tax      = Math.floor(rloKelvin * taxBps / 10_000);
+    const into     = rloKelvin - fee - tax;
     const { tokensOut } = calcBuyTokens(into, state.virtualRlo, state.virtualTokens);
     const limitedTokens = Math.min(tokensOut, TOTAL_SUPPLY - t.tokenSupply);
     if (limitedTokens <= 0) return res.status(400).json({ error: "No tokens available" });
@@ -557,9 +624,9 @@ app.post("/tokens/:id/buy", async (req, res) => {
       id: uuidv4().replace(/-/g, "").slice(0, 16),
       type: "buy",
       trader,
-      rloAmount,
+      rloAmount: rloKelvin,        // stored in kelvin
       tokenAmount: limitedTokens,
-      price: rloAmount / limitedTokens,
+      price: rloKelvin / limitedTokens,
       timestamp: Date.now(),
       txHash,
       onchain,
@@ -570,16 +637,18 @@ app.post("/tokens/:id/buy", async (req, res) => {
       t.tokenSupply += limitedTokens;
       t.realRloRaised = (t.realRloRaised || 0) + into;
       if (t.realRloRaised >= GRADUATION_RLO_TARGET) t.graduated = true;
+    } else {
+      await syncOnchainState(t);
     }
     const newState = buildVirtualState(t);
-    t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
+    t.marketCap = Math.round(kelvinToRlo(newState.currentPrice) * t.tokenSupply);
     tokens.set(t.id, t);
     saveTokens(tokens);
 
     res.json({
       success: true, trade,
       tokenSupply: t.tokenSupply, graduated: t.graduated,
-      currentPrice: newState.currentPrice,
+      currentPrice: kelvinToRlo(newState.currentPrice),
       progressPct: Math.min(100, ((t.realRloRaised || newState.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
     });
   } catch (e: unknown) {
@@ -644,15 +713,18 @@ app.post("/tokens/:id/sell", async (req, res) => {
     if (!onchain) {
       t.tokenSupply -= tokenAmount;
       t.realRloRaised = Math.max(0, (t.realRloRaised || 0) - rloGross);
+    } else {
+      await syncOnchainState(t);
     }
     const newState = buildVirtualState(t);
-    t.marketCap = Math.round(newState.currentPrice * t.tokenSupply);
+    t.marketCap = Math.round(kelvinToRlo(newState.currentPrice) * t.tokenSupply);
     tokens.set(t.id, t);
     saveTokens(tokens);
 
     res.json({
       success: true, trade,
-      tokenSupply: t.tokenSupply, currentPrice: newState.currentPrice,
+      tokenSupply: t.tokenSupply,
+      currentPrice: kelvinToRlo(newState.currentPrice),
       progressPct: Math.min(100, ((t.realRloRaised || newState.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
     });
   } catch (e: unknown) {
