@@ -6,18 +6,20 @@ import type { WalletState } from "../types";
 import { toast } from "sonner";
 import { Loader2, Rocket, Upload, ExternalLink, Percent } from "lucide-react";
 import { clsx } from "clsx";
-import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes, makeTokenIdHex } from "../rialo/chain";
+import { tokenIdToBytes, makeTokenIdHex } from "../rialo/chain";
 import { buildCreateTokenIx } from "../rialo/program";
+import type { RialoInstruction } from "../rialo/program";
 
 interface CreateTokenFormProps {
   wallet: WalletState | null;
+  signTx: (instructions: RialoInstruction[]) => Promise<string>;
   onCreated: (tokenId: string) => void;
 }
 
 const spectral = "linear-gradient(90deg, #5fbeff, #af8ff4, #f05c6b, #ffcd83, #7ef1b3)";
 const EXPLORER_BASE = "https://rialo-explorer-devnet-direct.vercel.app";
 
-export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
+export function CreateTokenForm({ wallet, signTx, onCreated }: CreateTokenFormProps) {
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
   const [description, setDescription] = useState("");
@@ -41,10 +43,11 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
     setTxHash(null);
 
     try {
-      // Generate a random 32-char hex token ID (16 random bytes)
+      // Generate a random token ID (16 random bytes)
       const tokenIdHex = makeTokenIdHex();
       const tokenIdBytes = tokenIdToBytes(tokenIdHex);
-      const keypair = keypairFromHex(wallet.secretHex);
+      const { PublicKey } = await import("@rialo/ts-cdk");
+      const creatorPk = PublicKey.fromString(wallet.pubkey);
 
       const ix = buildCreateTokenIx({
         tokenId: tokenIdBytes,
@@ -53,9 +56,10 @@ export function CreateTokenForm({ wallet, onCreated }: CreateTokenFormProps) {
         description: description.trim(),
         imageUrl: imageUrl.trim(),
         tokenTaxBps: BigInt(taxBps),
-        creator: keypair.publicKey,
+        creator: creatorPk,
       });
-      const signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+      // signTx handles all wallet types: generated (local key), extension (Frost popup)
+      const signedTxBase64 = await signTx([ix]);
 
       const result = await api.createToken({
         name: name.trim(),

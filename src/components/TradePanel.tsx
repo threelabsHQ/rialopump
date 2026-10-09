@@ -7,8 +7,9 @@ import { TrendingUp, TrendingDown, Loader2, AlertCircle, CheckCircle2, ExternalL
 import { toast } from "sonner";
 
 import { clsx } from "clsx";
-import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes } from "../rialo/chain";
+import { tokenIdToBytes } from "../rialo/chain";
 import { buildBuyIx, buildSellIx } from "../rialo/program";
+import type { RialoInstruction } from "../rialo/program";
 
 interface QuoteResult {
   tokensOut?: number;
@@ -22,6 +23,7 @@ interface QuoteResult {
 interface TradePanelProps {
   token: Token;
   wallet: WalletState | null;
+  signTx: (instructions: RialoInstruction[]) => Promise<string>;
   onTrade: () => void | Promise<void>;
 }
 
@@ -29,7 +31,7 @@ type TxState = "idle" | "quoting" | "signing" | "confirming" | "success" | "erro
 
 const EXPLORER_BASE = "https://rialo-explorer-devnet-direct.vercel.app";
 
-export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
+export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) {
   const [tab, setTab] = useState<"buy" | "sell">("buy");
   const [amount, setAmount] = useState("");
   const [quote, setQuote] = useState<QuoteResult | null>(null);
@@ -46,7 +48,8 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
     setTxState("quoting");
     try {
       if (tab === "buy") {
-        const q = await api.quoteBuy(token.id, Math.round(parseFloat(val) * KELVIN));
+        // Server quote-buy expects RLO float, not kelvin
+        const q = await api.quoteBuy(token.id, parseFloat(val));
         setQuote(q);
       } else {
         const q = await api.quoteSell(token.id, parseFloat(val));
@@ -71,27 +74,27 @@ export function TradePanel({ token, wallet, onTrade }: TradePanelProps) {
 
     try {
       const tokenIdBytes = tokenIdToBytes(token.id);
-      const keypair = keypairFromHex(wallet.secretHex);
-
-      let signedTxBase64: string;
+      const { PublicKey } = await import("@rialo/ts-cdk");
+      const traderPk = PublicKey.fromString(wallet.pubkey);
 
       if (tab === "buy") {
-        const kelvin = BigInt(Math.round(parseFloat(amount) * KELVIN));
-        // 5% slippage tolerance on minimum tokens out
+        const rloFloat = parseFloat(amount);
+        const kelvin = BigInt(Math.round(rloFloat * KELVIN));
         const minTokensOut = quote?.tokensOut ? BigInt(Math.floor(quote.tokensOut * 0.95)) : 0n;
-        const ix = buildBuyIx({ tokenId: tokenIdBytes, buyer: keypair.publicKey, rloAmount: kelvin, minTokensOut });
-        signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+        const ix = buildBuyIx({ tokenId: tokenIdBytes, buyer: traderPk, rloAmount: kelvin, minTokensOut });
+        // signTx handles all wallet types (generated local key / extension Frost popup)
+        const signedTxBase64 = await signTx([ix]);
 
         setTxState("confirming");
-        const result = await api.buy(token.id, wallet.pubkey, Number(kelvin), signedTxBase64);
+        // Server buy expects rloAmount in RLO float
+        const result = await api.buy(token.id, wallet.pubkey, rloFloat, signedTxBase64);
         toast.success(`Bought ${result.trade.tokenAmount.toLocaleString()} $${token.symbol}`);
         setTxHash(result.trade.txHash);
       } else {
         const tokenAmt = BigInt(Math.round(parseFloat(amount)));
-        // 5% slippage tolerance on minimum RLO out
-        const minRloOut = quote?.rloOut ? BigInt(Math.floor(quote.rloOut * 0.95)) : 0n;
-        const ix = buildSellIx({ tokenId: tokenIdBytes, seller: keypair.publicKey, tokenAmount: tokenAmt, minRloOut });
-        signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+        const minRloOut = quote?.rloOut ? BigInt(Math.floor(quote.rloOut * 0.95 * KELVIN)) : 0n;
+        const ix = buildSellIx({ tokenId: tokenIdBytes, seller: traderPk, tokenAmount: tokenAmt, minRloOut });
+        const signedTxBase64 = await signTx([ix]);
 
         setTxState("confirming");
         const result = await api.sell(token.id, wallet.pubkey, Number(tokenAmt), signedTxBase64);

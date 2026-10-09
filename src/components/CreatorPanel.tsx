@@ -8,8 +8,9 @@ import { useState } from "react";
 import { GlassCard, InnerField } from "./ui/GlassCard";
 import { api } from "../api";
 import type { Token, WalletState } from "../types";
-import { keypairFromHex, buildSignedTxBytes, tokenIdToBytes } from "../rialo/chain";
+import { tokenIdToBytes } from "../rialo/chain";
 import { buildClaimCreatorEarningsIx, buildUpdateTokenTaxIx } from "../rialo/program";
+import type { RialoInstruction } from "../rialo/program";
 import { Loader2, DollarSign, Percent, ExternalLink, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { clsx } from "clsx";
@@ -18,13 +19,14 @@ import { formatRlo } from "../utils/crypto";
 interface CreatorPanelProps {
   token: Token;
   wallet: WalletState;
+  signTx: (instructions: RialoInstruction[]) => Promise<string>;
   onRefresh: () => void;
 }
 
 const EXPLORER_BASE = "https://rialo-explorer-devnet-direct.vercel.app";
 const KELVIN_PER_RLO = 1_000_000_000;
 
-export function CreatorPanel({ token, wallet, onRefresh }: CreatorPanelProps) {
+export function CreatorPanel({ token, wallet, signTx, onRefresh }: CreatorPanelProps) {
   const [claimBusy, setClaimBusy] = useState(false);
   const [taxBusy, setTaxBusy] = useState(false);
   const [newTaxPct, setNewTaxPct] = useState<number>((token.tokenTaxBps ?? 0) / 100);
@@ -39,9 +41,10 @@ export function CreatorPanel({ token, wallet, onRefresh }: CreatorPanelProps) {
     setClaimBusy(true);
     try {
       const tokenIdBytes = tokenIdToBytes(token.id);
-      const keypair = keypairFromHex(wallet.secretHex);
-      const ix = buildClaimCreatorEarningsIx({ tokenId: tokenIdBytes, creator: keypair.publicKey });
-      const signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+      const { PublicKey } = await import("@rialo/ts-cdk");
+      const creatorPk = PublicKey.fromString(wallet.pubkey);
+      const ix = buildClaimCreatorEarningsIx({ tokenId: tokenIdBytes, creator: creatorPk });
+      const signedTxBase64 = await signTx([ix]);
       const result = await api.claimCreatorEarnings(token.id, signedTxBase64);
       setLastSig(result.signature);
       toast.success(`Claimed ${formatRlo(earningsKelvin)} RLO!`);
@@ -60,9 +63,10 @@ export function CreatorPanel({ token, wallet, onRefresh }: CreatorPanelProps) {
     setTaxBusy(true);
     try {
       const tokenIdBytes = tokenIdToBytes(token.id);
-      const keypair = keypairFromHex(wallet.secretHex);
-      const ix = buildUpdateTokenTaxIx({ tokenId: tokenIdBytes, creator: keypair.publicKey, newTaxBps: BigInt(newBps) });
-      const signedTxBase64 = await buildSignedTxBytes([ix], keypair);
+      const { PublicKey } = await import("@rialo/ts-cdk");
+      const creatorPk = PublicKey.fromString(wallet.pubkey);
+      const ix = buildUpdateTokenTaxIx({ tokenId: tokenIdBytes, creator: creatorPk, newTaxBps: BigInt(newBps) });
+      const signedTxBase64 = await signTx([ix]);
       const result = await api.updateTokenTax(token.id, signedTxBase64, newBps);
       setLastSig(result.signature);
       toast.success(`Creator tax updated to ${(newBps / 100).toFixed(1)}%`);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "../api";
 import type { Token, TradeRecord, WalletState } from "../types";
+import type { RialoInstruction } from "../rialo/program";
 import { TradePanel } from "../components/TradePanel";
 import { BondingChart } from "../components/BondingChart";
 import { TradesTable } from "../components/TradesTable";
@@ -15,11 +16,12 @@ import { toast } from "sonner";
 interface TokenViewProps {
   tokenId: string;
   wallet: WalletState | null;
+  signTx: (instructions: RialoInstruction[]) => Promise<string>;
   onBack: () => void;
   isMobile: boolean;
 }
 
-export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps) {
+export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenViewProps) {
   const [token, setToken] = useState<Token | null>(null);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,9 +106,9 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
         // Mobile layout: stacked
         <div className="space-y-4">
           <BondingChart token={token} trades={trades} />
-          <TradePanel token={token} wallet={wallet} onTrade={() => { void load(); }} />
+          <TradePanel token={token} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
           {wallet && wallet.pubkey === token.creator && (
-            <CreatorPanel token={token} wallet={wallet} onRefresh={() => { void load(); }} />
+            <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />
           )}
           <TokenInfo token={token} trades={trades} />
           <TradesTable trades={trades} />
@@ -120,9 +122,9 @@ export function TokenView({ tokenId, wallet, onBack, isMobile }: TokenViewProps)
             <TradesTable trades={trades} />
           </div>
           <div className="space-y-4">
-            <TradePanel token={token} wallet={wallet} onTrade={() => { void load(); }} />
+            <TradePanel token={token} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
             {wallet && wallet.pubkey === token.creator && (
-              <CreatorPanel token={token} wallet={wallet} onRefresh={() => { void load(); }} />
+              <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />
             )}
           </div>
         </div>
