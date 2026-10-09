@@ -345,7 +345,7 @@ export function buildCreateTokenIx(params: {
   symbol: string;
   description: string;
   imageUrl: string;
-  tokenTaxBps: bigint;
+  tokenTaxBps: bigint | number;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
   const { pda: feeVaultPda }   = deriveFeeVaultPda(params.tokenId);
@@ -359,7 +359,7 @@ export function buildCreateTokenIx(params: {
     ],
     data: encodeCreateToken(
       params.tokenId, params.name, params.symbol,
-      params.description, params.imageUrl, params.tokenTaxBps,
+      params.description, params.imageUrl, BigInt(params.tokenTaxBps),
     ),
   };
 }
@@ -367,8 +367,8 @@ export function buildCreateTokenIx(params: {
 export function buildBuyIx(params: {
   tokenId: Uint8Array;
   buyer: PublicKey;
-  rloAmount: bigint;
-  minTokensOut: bigint;
+  rloAmount: bigint | number;
+  minTokensOut: bigint | number;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
   const { pda: feeVaultPda }   = deriveFeeVaultPda(params.tokenId);
@@ -380,15 +380,15 @@ export function buildBuyIx(params: {
       { pubkey: feeVaultPda,    isSigner: false, isWritable: true  },
       { pubkey: SYSTEM_PK,      isSigner: false, isWritable: false },
     ],
-    data: encodeBuy(params.tokenId, params.rloAmount, params.minTokensOut),
+    data: encodeBuy(params.tokenId, BigInt(params.rloAmount), BigInt(params.minTokensOut)),
   };
 }
 
 export function buildSellIx(params: {
   tokenId: Uint8Array;
   seller: PublicKey;
-  tokenAmount: bigint;
-  minRloOut: bigint;
+  tokenAmount: bigint | number;
+  minRloOut: bigint | number;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
   const { pda: feeVaultPda }   = deriveFeeVaultPda(params.tokenId);
@@ -400,7 +400,7 @@ export function buildSellIx(params: {
       { pubkey: feeVaultPda,    isSigner: false, isWritable: true  },
       { pubkey: SYSTEM_PK,      isSigner: false, isWritable: false },
     ],
-    data: encodeSell(params.tokenId, params.tokenAmount, params.minRloOut),
+    data: encodeSell(params.tokenId, BigInt(params.tokenAmount), BigInt(params.minRloOut)),
   };
 }
 
@@ -441,7 +441,7 @@ export function buildClaimCreatorEarningsIx(params: {
 export function buildUpdateTokenTaxIx(params: {
   tokenId: Uint8Array;
   creator: PublicKey;
-  newTaxBps: bigint;
+  newTaxBps: bigint | number;
 }): RialoInstruction {
   const { pda: tokenStatePda } = deriveTokenStatePda(params.tokenId);
   return {
@@ -450,6 +450,6 @@ export function buildUpdateTokenTaxIx(params: {
       { pubkey: params.creator,   isSigner: true,  isWritable: false },
       { pubkey: tokenStatePda,    isSigner: false, isWritable: true  },
     ],
-    data: encodeUpdateTokenTax(params.tokenId, params.newTaxBps),
+    data: encodeUpdateTokenTax(params.tokenId, BigInt(params.newTaxBps)),
   };
 }
