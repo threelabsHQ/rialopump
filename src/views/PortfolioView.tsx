@@ -14,7 +14,6 @@ interface PortfolioViewProps {
 export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
   const [holdings, setHoldings] = useState<PortfolioHolding[]>([]);
   const [loading, setLoading] = useState(false);
-  const KELVIN = 1_000_000_000;
 
   // oxlint-disable-next-line react/set-state-in-effect -- loading spinner before async fetch is intentional
   useEffect(() => {
@@ -43,13 +42,15 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
   const totalValue = holdings.reduce((s, h) => s + h.value, 0);
   const totalPnl = holdings.reduce((s, h) => s + h.pnl, 0);
 
+  const fmtRlo = (v: number) => v >= 0.0001 ? v.toFixed(4) : v.toExponential(2);
+
   return (
     <div className="space-y-4">
       {/* Summary */}
       <GlassCard className="p-4">
         <p className="text-xs font-medium" style={{ color: "var(--muted)" }}>Portfolio Value</p>
         <p className="display text-3xl font-bold tabular-nums mt-1" style={{ color: "var(--ink)", letterSpacing: "-0.03em" }}>
-          {(totalValue / KELVIN).toFixed(4)} <span className="text-lg" style={{ color: "var(--muted)" }}>RLO</span>
+          {fmtRlo(totalValue)} <span className="text-lg" style={{ color: "var(--muted)" }}>RLO</span>
         </p>
         <div className="flex items-center gap-1 mt-1">
           {totalPnl >= 0
@@ -59,7 +60,7 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
             className="text-sm font-semibold tabular-nums"
             style={{ color: totalPnl >= 0 ? "var(--success)" : "var(--danger)" }}
           >
-            {totalPnl >= 0 ? "+" : ""}{(totalPnl / KELVIN).toFixed(4)} RLO
+            {totalPnl >= 0 ? "+" : ""}{fmtRlo(totalPnl)} RLO
           </span>
         </div>
       </GlassCard>
@@ -93,7 +94,7 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
                         {h.token.name}
                       </span>
                       <span className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
-                        {(h.value / KELVIN).toFixed(4)} RLO
+                        {fmtRlo(h.value)} RLO
                       </span>
                     </div>
                     <div className="flex items-center justify-between mt-0.5">
@@ -104,7 +105,7 @@ export function PortfolioView({ wallet, onSelectToken }: PortfolioViewProps) {
                         className="text-xs font-medium tabular-nums"
                         style={{ color: h.pnl >= 0 ? "var(--success)" : "var(--danger)" }}
                       >
-                        {h.pnl >= 0 ? "+" : ""}{(h.pnl / KELVIN).toFixed(4)} RLO
+                        {h.pnl >= 0 ? "+" : ""}{fmtRlo(h.pnl)} RLO
                       </span>
                     </div>
                     {/* Weight bar */}
