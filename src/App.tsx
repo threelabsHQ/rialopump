@@ -8,7 +8,8 @@ import { TokenView } from "./views/TokenView";
 import { CreateTokenForm } from "./components/CreateTokenForm";
 import { PortfolioView } from "./views/PortfolioView";
 import type { View, WalletState } from "./types";
-import { Home, Rocket, Briefcase, Zap, Menu, X, ChevronUp } from "lucide-react";
+import { Home, Rocket, Briefcase, Zap, Menu, X, ChevronUp, Sun, Moon } from "lucide-react";
+import { useTheme } from "./hooks/useTheme";
 import { Toaster } from "sonner";
 
 const spectral = "linear-gradient(90deg, #5fbeff, #af8ff4, #f05c6b, #ffcd83, #7ef1b3)";
@@ -48,6 +49,22 @@ function ChainStatus() {
         {blockHeight && ` · ${blockHeight}`}
       </span>
     </div>
+  );
+}
+
+function ThemeToggle() {
+  const { theme, toggle } = useTheme();
+  return (
+    <button
+      onClick={toggle}
+      className="w-8 h-8 rounded-xl flex items-center justify-center transition-all hover:opacity-80"
+      style={{ background: "var(--surface-strong)", border: "1px solid var(--border)" }}
+      aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+    >
+      {theme === "dark"
+        ? <Sun  size={14} style={{ color: "var(--warn)" }} />
+        : <Moon size={14} style={{ color: "var(--accent)" }} />}
+    </button>
   );
 }
 
@@ -94,9 +111,9 @@ function AppInner() {
 
   const blobs = (
     <div className="fixed inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 0 }}>
-      <div style={{ position: "absolute", top: "6%", left: "3%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(79,158,255,0.12) 0%, transparent 70%)", filter: "blur(80px)" }} />
-      <div style={{ position: "absolute", bottom: "8%", right: "4%", width: 350, height: 350, borderRadius: "50%", background: "radial-gradient(circle, rgba(175,143,244,0.10) 0%, transparent 70%)", filter: "blur(75px)" }} />
-      <div style={{ position: "absolute", top: "42%", right: "18%", width: 260, height: 260, borderRadius: "50%", background: "radial-gradient(circle, rgba(52,210,122,0.07) 0%, transparent 70%)", filter: "blur(60px)" }} />
+      <div style={{ position: "absolute", top: "6%",  left: "3%",  width: 420, height: 420, borderRadius: "50%", background: "radial-gradient(circle, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 70%)", filter: "blur(80px)" }} />
+      <div style={{ position: "absolute", bottom: "8%", right: "4%", width: 360, height: 360, borderRadius: "50%", background: "radial-gradient(circle, rgba(175,143,244,0.10) 0%, transparent 70%)", filter: "blur(75px)" }} />
+      <div style={{ position: "absolute", top: "42%", right: "18%", width: 280, height: 280, borderRadius: "50%", background: "radial-gradient(circle, rgba(52,210,122,0.07) 0%, transparent 70%)", filter: "blur(60px)" }} />
     </div>
   );
 
@@ -105,7 +122,7 @@ function AppInner() {
       <div className="min-h-dvh" style={{ background: "var(--bg-gradient)" }}>
         {blobs}
         <header className="fixed top-0 left-0 right-0 z-30 flex items-center justify-between px-4 py-3"
-          style={{ background: "rgba(10,22,40,0.82)", backdropFilter: "blur(20px) saturate(180%)", WebkitBackdropFilter: "blur(20px) saturate(180%)", borderBottom: "1px solid var(--border)" }}>
+          style={{ background: "var(--card-bg)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", borderBottom: "1px solid var(--card-border)" }}>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: spectral }}>
               <Zap size={14} color="white" />
@@ -114,6 +131,7 @@ function AppInner() {
           </div>
           <div className="flex items-center gap-2">
             <ChainStatus />
+            <ThemeToggle />
             <button onClick={() => setSidebarOpen(!sidebarOpen)}
               className="w-8 h-8 rounded-xl flex items-center justify-center"
               style={{ background: "var(--surface)" }}>
@@ -123,7 +141,7 @@ function AppInner() {
         </header>
 
         {sidebarOpen && (
-          <div className="fixed inset-0 z-20" style={{ background: "rgba(18,45,69,0.4)", backdropFilter: "blur(4px)" }}
+          <div className="fixed inset-0 z-20" style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(6px)" }}
             onClick={() => setSidebarOpen(false)}>
             <div className="absolute top-16 right-0 left-0 p-4" onClick={(e) => e.stopPropagation()}>
               <WalletPanel
@@ -149,7 +167,7 @@ function AppInner() {
         </main>
 
         <nav className="fixed bottom-0 left-0 right-0 z-30 flex"
-          style={{ background: "rgba(10,22,40,0.92)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", borderTop: "1px solid var(--border)", paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+          style={{ background: "var(--card-bg)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", borderTop: "1px solid var(--card-border)", paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
           {tabs.map((t) => (
             <button key={t.key} onClick={() => { setView(t.key); if (t.key !== "token") setSelectedToken(null); }}
               className="flex-1 flex flex-col items-center justify-center gap-1 py-3 transition-all"
@@ -168,7 +186,7 @@ function AppInner() {
     <div className="min-h-dvh flex" style={{ background: "var(--bg-gradient)" }}>
       {blobs}
       <aside className="fixed left-0 top-0 bottom-0 z-20 flex flex-col w-72"
-        style={{ background: "rgba(10,22,40,0.80)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", borderRight: "1px solid var(--border)" }}>
+        style={{ background: "var(--card-bg)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", borderRight: "1px solid var(--card-border)" }}>
         <div className="px-6 pt-6 pb-4">
           <div className="flex items-center gap-3 mb-1">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: spectral }}>
@@ -208,7 +226,7 @@ function AppInner() {
 
       <main className="flex-1 ml-72 relative z-10 min-h-dvh">
         <header className="sticky top-0 z-10 flex items-center justify-between px-8 py-4"
-          style={{ background: "rgba(10,22,40,0.85)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border)" }}>
+          style={{ background: "var(--card-bg)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", borderBottom: "1px solid var(--card-border)" }}>
           <div>
             {view === "home"      && <h1 className="display text-xl font-bold" style={{ color: "var(--ink)", letterSpacing: "-0.02em" }}>Token Feed</h1>}
             {view === "create"    && <h1 className="display text-xl font-bold" style={{ color: "var(--ink)", letterSpacing: "-0.02em" }}>Launch Token</h1>}
@@ -222,10 +240,11 @@ function AppInner() {
           <div className="flex items-center gap-3">
             {multi.activeWallet && (
               <span className="px-3 py-1.5 rounded-full text-xs font-bold tabular-nums"
-                style={{ background: "var(--surface)", color: "var(--ink)" }}>
+                style={{ background: "var(--surface-strong)", border: "1px solid var(--border)", color: "var(--ink)" }}>
                 {multi.activeWallet.balance.toFixed(4)} RLO
               </span>
             )}
+            <ThemeToggle />
           </div>
         </header>
         <div className="px-8 py-6">

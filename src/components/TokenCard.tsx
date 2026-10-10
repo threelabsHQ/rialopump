@@ -26,9 +26,9 @@ function fmtPriceUsd(val: number): string {
 }
 
 export function TokenCard({ token, onClick }: TokenCardProps) {
-  const priceUsd  = token.priceUsd  ?? 0;
-  const mcapUsd   = token.marketCapUsd ?? 0;
-  const rloRaised = token.realRloRaised ?? 0;
+  const priceUsd   = token.priceUsd       ?? 0;
+  const mcapUsd    = token.marketCapUsd   ?? 0;
+  const rloRaised  = token.realRloRaised  ?? 0;
   const gradTarget = token.graduationTarget ?? 85;
 
   return (
@@ -36,31 +36,31 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
       onClick={onClick}
       className="rounded-2xl cursor-pointer transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] overflow-hidden"
       style={{
-        background: "rgba(255,255,255,0.05)",
-        border: "1px solid rgba(255,255,255,0.09)",
-        boxShadow: "0 4px 24px rgba(0,0,0,0.20)",
+        background: "var(--card-bg)",
+        border: "1px solid var(--card-border)",
+        boxShadow: "var(--shadow-card)",
       }}
     >
-      {/* Top accent line */}
-      <div className="h-0.5 w-full" style={{ background: "linear-gradient(90deg, #4f9eff, #af8ff4, #f05c6b)" }} />
+      {/* Top accent bar */}
+      <div className="h-[3px] w-full" style={{ background: "linear-gradient(90deg,#4f9eff,#af8ff4,#f05c6b,#ffcd83)" }} />
 
       <div className="p-4 space-y-3">
-        {/* Header row */}
+        {/* Header */}
         <div className="flex items-start gap-3">
-          <TokenAvatar imageUrl={token.imageUrl} symbol={token.symbol} size={44} />
+          <TokenAvatar imageUrl={token.imageUrl} symbol={token.symbol} size={46} />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="display text-sm font-bold" style={{ color: "var(--ink)" }}>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="display text-sm font-bold leading-tight" style={{ color: "var(--ink)" }}>
                 {token.name}
               </span>
-              <span className="px-1.5 py-0.5 rounded-md text-xs font-semibold"
-                style={{ background: "rgba(79,158,255,0.15)", color: "var(--accent)" }}>
+              <span className="px-1.5 py-0.5 rounded-md text-xs font-bold"
+                style={{ background: "rgba(79,158,255,0.14)", color: "var(--accent)" }}>
                 ${token.symbol}
               </span>
               {token.graduated && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold"
-                  style={{ background: "rgba(52,210,122,0.15)", color: "var(--success)" }}>
-                  <Zap size={10} /> Graduated
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-bold"
+                  style={{ background: "rgba(52,210,122,0.14)", color: "var(--success)" }}>
+                  <Zap size={9} /> Grad
                 </span>
               )}
             </div>
@@ -70,43 +70,32 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
           </div>
         </div>
 
-        {/* Stats row: 3 cols */}
+        {/* Stats grid */}
         <div className="grid grid-cols-3 gap-2">
-          <div className="rounded-xl px-2 py-2 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-            <p className="text-xs mb-0.5" style={{ color: "var(--muted)" }}>Market Cap</p>
-            <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
-              {fmtUsd(mcapUsd)}
-            </p>
-          </div>
-          <div className="rounded-xl px-2 py-2 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-            <p className="text-xs mb-0.5" style={{ color: "var(--muted)" }}>Price</p>
-            <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
-              {fmtPriceUsd(priceUsd)}
-            </p>
-          </div>
-          <div className="rounded-xl px-2 py-2 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
-            <p className="text-xs mb-0.5" style={{ color: "var(--muted)" }}>Trades</p>
-            <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>
-              {token.tradeCount}
-            </p>
-          </div>
+          {[
+            { label: "Mkt Cap", value: fmtUsd(mcapUsd) },
+            { label: "Price",   value: fmtPriceUsd(priceUsd) },
+            { label: "Trades",  value: String(token.tradeCount) },
+          ].map(({ label, value }) => (
+            <div key={label} className="rounded-xl px-2 py-2 text-center"
+              style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
+              <p className="text-[10px] font-medium mb-0.5" style={{ color: "var(--muted)" }}>{label}</p>
+              <p className="text-xs font-bold tabular-nums" style={{ color: "var(--ink)" }}>{value}</p>
+            </div>
+          ))}
         </div>
 
-        {/* Bonding curve progress */}
-        <ProgressBar
-          value={token.progressPct}
-          label="Bonding curve"
-          graduated={token.graduated}
-        />
+        {/* Bonding curve */}
+        <ProgressBar value={token.progressPct} label="Bonding curve" graduated={token.graduated} />
 
         {/* Footer */}
-        <div className="flex items-center justify-between text-xs" style={{ color: "var(--subtle)" }}>
+        <div className="flex items-center justify-between text-[11px]" style={{ color: "var(--subtle)" }}>
           <span>{timeAgo(token.createdAt)}</span>
           {token.graduated ? (
             <span className="font-semibold" style={{ color: "var(--success)" }}>Graduated 🎓</span>
           ) : (
-            <span>
-              {rloRaised >= 0.001 ? rloRaised.toFixed(2) : rloRaised.toExponential(2)} / {gradTarget.toFixed(0)} RLO raised
+            <span className="tabular-nums">
+              {rloRaised >= 0.001 ? rloRaised.toFixed(2) : rloRaised.toExponential(1)} / {gradTarget.toFixed(0)} RLO
             </span>
           )}
         </div>

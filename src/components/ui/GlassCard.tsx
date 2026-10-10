@@ -19,11 +19,11 @@ export function GlassCard({ children, className, style, onClick, hover }: GlassC
         className
       )}
       style={{
-        background: "var(--surface)",
-        backdropFilter: "blur(24px) saturate(160%)",
-        WebkitBackdropFilter: "blur(24px) saturate(160%)",
-        border: "1px solid var(--border)",
-        boxShadow: "0 8px 32px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.06)",
+        background: "var(--card-bg)",
+        backdropFilter: "var(--glass-blur)",
+        WebkitBackdropFilter: "var(--glass-blur)",
+        border: "1px solid var(--card-border)",
+        boxShadow: "var(--shadow-panel)",
         ...style,
       }}
     >
@@ -32,7 +32,11 @@ export function GlassCard({ children, className, style, onClick, hover }: GlassC
   );
 }
 
-export function InnerField({ children, className, style }: { children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
+export function InnerField({ children, className, style }: {
+  children: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   return (
     <div
       className={clsx("rounded-xl", className)}
