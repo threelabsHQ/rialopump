@@ -9,7 +9,8 @@ interface TokenCardProps {
   onClick: () => void;
 }
 
-function fmtUsd(val: number): string {
+function fmtUsd(val: number, hasSupply: boolean): string {
+  if (!hasSupply) return "—";
   if (val === 0) return "$0";
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(2)}M`;
   if (val >= 1_000)     return `$${(val / 1_000).toFixed(2)}K`;
@@ -25,11 +26,19 @@ function fmtPriceUsd(val: number): string {
   return `$${val.toExponential(2)}`;
 }
 
+function fmtRloRaised(val: number): string {
+  if (val <= 0) return "0";
+  if (val < 0.001) return "< 0.001";
+  if (val < 1) return val.toFixed(3);
+  return val.toFixed(2);
+}
+
 export function TokenCard({ token, onClick }: TokenCardProps) {
-  const priceUsd   = token.priceUsd       ?? 0;
-  const mcapUsd    = token.marketCapUsd   ?? 0;
-  const rloRaised  = token.realRloRaised  ?? 0;
+  const priceUsd   = token.priceUsd         ?? 0;
+  const mcapUsd    = token.marketCapUsd     ?? 0;
+  const rloRaised  = token.realRloRaised    ?? 0;
   const gradTarget = token.graduationTarget ?? 85;
+  const hasSupply  = (token.tokenSupply     ?? 0) > 0;
 
   return (
     <div
@@ -73,7 +82,7 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
         {/* Stats grid */}
         <div className="grid grid-cols-3 gap-2">
           {[
-            { label: "Mkt Cap", value: fmtUsd(mcapUsd) },
+            { label: "Mkt Cap", value: fmtUsd(mcapUsd, hasSupply) },
             { label: "Price",   value: fmtPriceUsd(priceUsd) },
             { label: "Trades",  value: String(token.tradeCount) },
           ].map(({ label, value }) => (
@@ -95,7 +104,7 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
             <span className="font-semibold" style={{ color: "var(--success)" }}>Graduated 🎓</span>
           ) : (
             <span className="tabular-nums">
-              {rloRaised >= 0.001 ? rloRaised.toFixed(2) : rloRaised.toExponential(1)} / {gradTarget.toFixed(0)} RLO
+              {fmtRloRaised(rloRaised)} / {gradTarget.toFixed(0)} RLO
             </span>
           )}
         </div>
