@@ -170,11 +170,14 @@ function AppInner() {
           style={{ background: "var(--card-bg)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", borderTop: "1px solid var(--card-border)", paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
           {tabs.map((t) => (
             <button key={t.key} onClick={() => { setView(t.key); if (t.key !== "token") setSelectedToken(null); }}
-              className="flex-1 flex flex-col items-center justify-center gap-1 py-3 transition-all"
+              className="relative flex-1 flex flex-col items-center justify-center gap-1 py-3 transition-all"
               style={{ color: view === t.key ? "var(--accent)" : "var(--muted)" }}>
+              {view === t.key && (
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full"
+                  style={{ background: "var(--accent)" }} />
+              )}
               {t.icon}
               <span className="text-xs font-semibold">{t.label}</span>
-              {view === t.key && <div className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full" style={{ background: "var(--accent)" }} />}
             </button>
           ))}
         </nav>
