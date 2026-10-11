@@ -91,6 +91,9 @@ export function shortenAddress(addr: string, chars = 4): string {
  *   0.00034 → "0.0003400"  (≤3 zeros: just fixed decimal)
  *   1.23    → "1.2300"
  */
+const SUB = "₀₁₂₃₄₅₆₇₈₉";
+const toSub = (n: number) => String(n).split("").map((c) => SUB[+c] ?? c).join("");
+
 export function fmtPumpPrice(val: number, sigFigs = 4): string {
   if (val === 0) return "0";
   if (val >= 0.01) return val.toFixed(sigFigs);
@@ -101,13 +104,21 @@ export function fmtPumpPrice(val: number, sigFigs = 4): string {
   while (zeros < dec.length && dec[zeros] === "0") zeros++;
   const sig = dec.slice(zeros, zeros + sigFigs).replace(/0+$/, "") || "0";
   if (zeros <= 3) return val.toFixed(zeros + sigFigs);
-  return `0.0(${zeros})${sig}`;
+  // 0.0₇31 — pump.fun style with real Unicode subscript digits
+  return `0.0${toSub(zeros)}${sig}`;
 }
 
 export function formatRlo(kelvin: number, decimals = 4): string {
   const rlo = kelvin / 1_000_000_000;
   if (rlo < 0.0001) return rlo.toExponential(2);
   return rlo.toFixed(decimals);
+}
+
+/** Format a USD value — e.g. $0.0000031 or $1.23 */
+export function fmtUsd(val: number, decimals = 6): string {
+  if (val === 0) return "$0";
+  if (val >= 0.01) return `$${val.toFixed(2)}`;
+  return `$${val.toFixed(decimals)}`;
 }
 
 export function formatLargeNumber(n: number): string {

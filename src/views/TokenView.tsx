@@ -9,8 +9,8 @@ import { CreatorPanel } from "../components/CreatorPanel";
 import { TokenAvatar } from "../components/ui/TokenAvatar";
 import { GlassCard } from "../components/ui/GlassCard";
 import { ProgressBar } from "../components/ui/ProgressBar";
-import { shortenAddress, formatLargeNumber, timeAgo, fmtPumpPrice } from "../utils/crypto";
-import { ArrowLeft, Copy, Loader2 } from "lucide-react";
+import { shortenAddress, formatLargeNumber, timeAgo, fmtPumpPrice, fmtUsd } from "../utils/crypto";
+import { ArrowLeft, Copy, ExternalLink, Loader2, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 
 interface TokenViewProps {
@@ -25,107 +25,111 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
   const [token, setToken] = useState<Token | null>(null);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]   = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [t, trs] = await Promise.all([
-        api.token(tokenId),
-        api.trades(tokenId),
-      ]);
-      setToken(t);
-      setTrades(trs);
-      setError(null);
+      const [t, trs] = await Promise.all([api.token(tokenId), api.trades(tokenId)]);
+      setToken(t); setTrades(trs); setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [tokenId]);
 
-  // eslint-disable-next-line react/set-state-in-effect -- load() updates state only after async fetch
+  // eslint-disable-next-line react/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     const id = setInterval(() => { void load(); }, 5_000);
     return () => clearInterval(id);
   }, [load]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20 gap-3">
-        <Loader2 size={24} className="animate-spin" style={{ color: "var(--muted)" }} />
-        <p className="text-sm" style={{ color: "var(--muted)" }}>Loading token…</p>
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="flex items-center justify-center py-24 gap-3">
+      <Loader2 size={22} className="animate-spin" style={{ color: "var(--accent)" }} />
+      <p className="text-sm" style={{ color: "var(--muted)" }}>Loading…</p>
+    </div>
+  );
 
-  if (error || !token) {
-    return (
-      <GlassCard className="p-6 text-center">
-        <p className="text-sm" style={{ color: "var(--danger)" }}>{error || "Token not found"}</p>
-        <button onClick={onBack} className="mt-3 text-sm px-4 py-2 rounded-xl" style={{ background: "var(--accent)", color: "white" }}>
-          Go back
-        </button>
-      </GlassCard>
-    );
-  }
+  if (error || !token) return (
+    <GlassCard className="p-8 text-center space-y-3">
+      <p className="text-sm" style={{ color: "var(--danger)" }}>{error ?? "Token not found"}</p>
+      <button onClick={onBack} className="btn-primary text-sm px-5 py-2 rounded-xl">Go back</button>
+    </GlassCard>
+  );
+
+  const isCreator = wallet?.pubkey === token.creator;
 
   return (
     <div className="space-y-4">
-      {/* Back + token header */}
-      <div className="flex items-center gap-3">
+
+      {/* ── Token Header ── */}
+      <div className="flex items-start gap-3">
         <button
           onClick={onBack}
-          className="w-9 h-9 rounded-xl flex items-center justify-center transition-all active:scale-95"
-          style={{ background: "var(--surface)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", border: "1px solid var(--border)" }}
+          className="mt-1 w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 transition-all active:scale-95"
+          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
         >
-          <ArrowLeft size={16} style={{ color: "var(--ink)" }} />
+          <ArrowLeft size={14} style={{ color: "var(--ink)" }} />
         </button>
+
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <TokenAvatar imageUrl={token.imageUrl} symbol={token.symbol} size={40} />
-          <div className="min-w-0">
+          <TokenAvatar imageUrl={token.imageUrl} symbol={token.symbol} size={44} />
+
+          <div className="flex-1 min-w-0">
+            {/* Name + badges */}
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="display text-base font-bold" style={{ color: "var(--ink)" }}>{token.name}</span>
-              <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: "var(--surface-strong)", color: "var(--ink-2)" }}>
+              <span className="display font-bold text-base leading-tight" style={{ color: "var(--ink)" }}>
+                {token.name}
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                style={{ background: "var(--surface-strong)", color: "var(--ink-2)" }}>
                 ${token.symbol}
               </span>
               {token.graduated && (
-                <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: "rgba(26,128,71,0.12)", color: "var(--success)" }}>
-                  Graduated
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                  style={{ background: "rgba(26,128,71,0.14)", color: "var(--success)" }}>
+                  ✓ Graduated
                 </span>
               )}
             </div>
-            <p className="text-xs truncate" style={{ color: "var(--muted)" }}>
-              by {shortenAddress(token.creator, 6)} · {timeAgo(token.createdAt)}
-            </p>
+
+            {/* Sub-line: price + meta */}
+            <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+              <span className="mono text-sm font-bold" style={{ color: "var(--accent)" }}>
+                {fmtPumpPrice(token.currentPrice ?? 0, 4)} RLO
+              </span>
+              {(token.priceUsd ?? 0) > 0 && (
+                <span className="text-xs" style={{ color: "var(--muted)" }}>
+                  {fmtUsd(token.priceUsd ?? 0, 8)}
+                </span>
+              )}
+              <span className="text-xs" style={{ color: "var(--muted)" }}>
+                by {shortenAddress(token.creator, 5)} · {timeAgo(token.createdAt)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
+      {/* ── Body ── */}
       {isMobile ? (
-        // Mobile layout: stacked
         <div className="space-y-4">
           <BondingChart token={token} trades={trades} />
           <TradePanel token={token} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
-          {wallet && wallet.pubkey === token.creator && (
-            <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />
-          )}
-          <TokenInfo token={token} trades={trades} />
+          {isCreator && <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />}
+          <TokenInfo token={token} />
           <TradesTable trades={trades} />
         </div>
       ) : (
-        // Desktop layout: 2-column
-        <div className="grid grid-cols-[1fr_380px] gap-4">
+        <div className="grid grid-cols-[1fr_360px] gap-4 items-start">
           <div className="space-y-4">
             <BondingChart token={token} trades={trades} />
-            <TokenInfo token={token} trades={trades} />
+            <TokenInfo token={token} />
             <TradesTable trades={trades} />
           </div>
-          <div className="space-y-4">
+          <div className="space-y-3">
             <TradePanel token={token} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
-            {wallet && wallet.pubkey === token.creator && (
-              <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />
-            )}
+            {isCreator && <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />}
           </div>
         </div>
       )}
@@ -133,47 +137,72 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
   );
 }
 
-function TokenInfo({ token, trades }: { token: Token; trades: TradeRecord[] }) {
-  const copy = (text: string) => { void navigator.clipboard.writeText(text).then(() => toast.success("Copied")); };
+// ─── Token Info Panel ──────────────────────────────────────────────────────────
 
-  const price = token.currentPrice ?? 0;
-  const stats = [
-    { label: "Price",        value: `${fmtPumpPrice(price, 4)} RLO` },
-    { label: "Total Supply", value: formatLargeNumber(token.totalSupply) },
-    { label: "Tokens Sold",  value: formatLargeNumber(token.tokenSupply) },
-    { label: "Mkt Cap",      value: token.tokenSupply > 0 ? `${token.marketCap >= 0.001 ? token.marketCap.toFixed(3) : fmtPumpPrice(token.marketCap, 3)} RLO` : "—" },
-    { label: "Trades",       value: token.tradeCount?.toString() || trades.length.toString() },
-    { label: "Creator Tax",  value: `${((token.tokenTaxBps ?? 0) / 100).toFixed(1)}%` },
-  ];
+function TokenInfo({ token }: { token: Token }) {
+  const copy = (v: string) => void navigator.clipboard.writeText(v).then(() => toast.success("Copied"));
+
+  const explorerUrl = `https://rialo-explorer-devnet-direct.vercel.app/accounts/${token.creator}`;
 
   return (
-    <GlassCard className="p-4 space-y-3">
-      <h3 className="text-sm font-semibold" style={{ color: "var(--ink)" }}>Token Info</h3>
+    <GlassCard className="p-4 space-y-4">
+
+      {/* Description */}
       {token.description && (
-        <p className="text-sm" style={{ color: "var(--muted)" }}>{token.description}</p>
+        <p className="text-sm leading-relaxed" style={{ color: "var(--ink-2)" }}>{token.description}</p>
       )}
-      <div className="grid grid-cols-3 gap-2">
-        {stats.map((s) => (
-          <div key={s.label} className="rounded-xl p-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
-            <p className="text-xs" style={{ color: "var(--muted)" }}>{s.label}</p>
-            <p className="text-sm font-bold tabular-nums" style={{ color: "var(--ink)" }}>{s.value}</p>
+
+      {/* Compact stat row */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {[
+          { label: "Price",        value: `${fmtPumpPrice(token.currentPrice ?? 0, 4)} RLO` },
+          { label: "Mkt Cap",      value: (token.tokenSupply ?? 0) > 0
+            ? `${(token.marketCap ?? 0) >= 0.001 ? (token.marketCap ?? 0).toFixed(3) : fmtPumpPrice(token.marketCap ?? 0, 3)} RLO`
+            : "—" },
+          { label: "Tokens Sold",  value: formatLargeNumber(token.tokenSupply ?? 0) },
+          { label: "Total Supply", value: formatLargeNumber(token.totalSupply ?? 1_000_000_000) },
+          { label: "Trades",       value: (token.tradeCount ?? 0).toString() },
+          { label: "Creator Tax",  value: `${((token.tokenTaxBps ?? 0) / 100).toFixed(1)}%` },
+        ].map(({ label, value }) => (
+          <div key={label} className="rounded-lg p-2.5"
+            style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
+            <p className="text-xs" style={{ color: "var(--muted)" }}>{label}</p>
+            <p className="text-sm font-semibold tabular-nums mt-0.5" style={{ color: "var(--ink)" }}>{value}</p>
           </div>
         ))}
       </div>
+
+      {/* Graduation progress */}
       <ProgressBar
-        value={token.progressPct}
-        label={`Graduation — ${(token.realRloRaised ?? 0).toFixed(2)} / ${(token.graduationTarget ?? 85).toFixed(0)} RLO raised`}
+        value={token.progressPct ?? 0}
+        label={`${(token.realRloRaised ?? 0).toFixed(4)} / ${(token.graduationTarget ?? 85).toFixed(0)} RLO raised`}
         graduated={token.graduated}
       />
-      <div className="flex items-center justify-between text-xs pt-1">
-        <span style={{ color: "var(--muted)" }}>Creator</span>
-        <div className="flex items-center gap-2">
-          <span className="mono" style={{ color: "var(--ink-2)" }}>{token.creator.slice(0, 12)}…</span>
-          <button onClick={() => copy(token.creator)} className="p-1 rounded hover:opacity-70">
+
+      {/* Creator row */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs" style={{ color: "var(--muted)" }}>Creator</span>
+        <div className="flex items-center gap-1.5">
+          <span className="mono text-xs" style={{ color: "var(--ink-2)" }}>
+            {shortenAddress(token.creator, 8)}
+          </span>
+          <button onClick={() => copy(token.creator)}
+            className="p-1 rounded-md transition-opacity hover:opacity-60 active:scale-95">
             <Copy size={11} style={{ color: "var(--muted)" }} />
           </button>
+          <a href={explorerUrl} target="_blank" rel="noopener noreferrer"
+            className="p-1 rounded-md transition-opacity hover:opacity-60">
+            <ExternalLink size={11} style={{ color: "var(--muted)" }} />
+          </a>
         </div>
       </div>
+
+      {/* Devnet badge */}
+      <div className="flex items-center gap-1.5">
+        <TrendingUp size={11} style={{ color: "var(--accent)" }} />
+        <span className="text-xs" style={{ color: "var(--muted)" }}>Rialo Devnet · Program {token.id.slice(0, 8)}…</span>
+      </div>
+
     </GlassCard>
   );
 }

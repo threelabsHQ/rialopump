@@ -629,7 +629,7 @@ app.post("/tokens/:id/buy", async (req, res) => {
       trader,
       rloAmount: rloKelvin,        // stored in kelvin
       tokenAmount: limitedTokens,
-      price: rloKelvin / limitedTokens,
+      price: kelvinToRlo(rloKelvin) / limitedTokens,
       timestamp: Date.now(),
       txHash,
       onchain,
@@ -706,7 +706,7 @@ app.post("/tokens/:id/sell", async (req, res) => {
       trader,
       rloAmount: rloAfterFee,
       tokenAmount,
-      price: rloAfterFee / tokenAmount,
+      price: kelvinToRlo(rloAfterFee) / tokenAmount,
       timestamp: Date.now(),
       txHash,
       onchain,

@@ -225,8 +225,8 @@ export function useMultiWallet() {
     if (type === "generated" && genWallet?.secretHex) {
       const kp = keypairFromHex(genWallet.secretHex);
       const tx = buildTx(instructions, kp.publicKey, configHashPrefix);
-      const signed = tx.sign(kp);
-      return btoa(String.fromCharCode(...signed.serialize()));
+      tx.sign(kp);
+      return btoa(String.fromCharCode(...tx.serialize()));
     }
 
     if (type === "extension" && extAccount) {
