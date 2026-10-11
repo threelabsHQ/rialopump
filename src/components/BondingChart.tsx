@@ -15,7 +15,9 @@ export function BondingChart({ token, trades = [] }: BondingChartProps) {
     if (!trades.length) return [];
     return trades.slice().reverse().map((t, i) => ({
       i,
-      price: t.price,    // RLO per token — no conversion needed
+      // trade.price may be kelvin/token (legacy) or RLO/token (new).
+      // Values > 1 are kelvin (pump.fun prices are always < 1 RLO/token).
+      price: t.price > 1 ? t.price / 1_000_000_000 : t.price,
       type: t.type,
       time: t.timestamp,
     }));
