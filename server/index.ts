@@ -317,7 +317,8 @@ app.get("/chain", async (_req, res) => {
 app.post("/rpc/config-hash", async (_req, res) => {
   try {
     const configHashPrefix = await client.getConfigHashPrefix();
-    res.json({ configHashPrefix: configHashPrefix.toString() });
+    const val = configHashPrefix.toString();
+    res.json({ configHashPrefix: val, configHash: val });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
