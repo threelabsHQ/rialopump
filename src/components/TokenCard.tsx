@@ -1,7 +1,7 @@
 import { ProgressBar } from "./ui/ProgressBar";
 import { TokenAvatar } from "./ui/TokenAvatar";
 import type { Token } from "../types";
-import { timeAgo } from "../utils/crypto";
+import { timeAgo, fmtPumpPrice } from "../utils/crypto";
 import { Zap } from "lucide-react";
 
 interface TokenCardProps {
@@ -19,13 +19,6 @@ function fmtUsd(val: number, hasSupply: boolean): string {
   return `$${val.toExponential(2)}`;
 }
 
-function fmtPriceUsd(val: number): string {
-  if (val === 0) return "$0";
-  if (val >= 0.01)     return `$${val.toFixed(4)}`;
-  if (val >= 0.000001) return `$${val.toFixed(8)}`;
-  return `$${val.toExponential(2)}`;
-}
-
 function fmtRloRaised(val: number): string {
   if (val <= 0) return "0";
   if (val < 0.001) return "< 0.001";
@@ -34,7 +27,6 @@ function fmtRloRaised(val: number): string {
 }
 
 export function TokenCard({ token, onClick }: TokenCardProps) {
-  const priceUsd   = token.priceUsd         ?? 0;
   const mcapUsd    = token.marketCapUsd     ?? 0;
   const rloRaised  = token.realRloRaised    ?? 0;
   const gradTarget = token.graduationTarget ?? 85;
@@ -83,7 +75,7 @@ export function TokenCard({ token, onClick }: TokenCardProps) {
         <div className="grid grid-cols-3 gap-2">
           {[
             { label: "Mkt Cap", value: fmtUsd(mcapUsd, hasSupply) },
-            { label: "Price",   value: fmtPriceUsd(priceUsd) },
+            { label: "Price",   value: fmtPumpPrice(token.currentPrice ?? 0, 4) + " RLO" },
             { label: "Trades",  value: String(token.tradeCount) },
           ].map(({ label, value }) => (
             <div key={label} className="rounded-xl px-2 py-2 text-center"

@@ -14,7 +14,8 @@
     "contracts:build": "forge build",
     "contracts:test": "forge test",
     "server": "bun run server/index.ts",
-    "start": "bun run server/index.ts"
+    "build": "vite build",
+    "start": "bun run build && bun run server/index.ts"
   },
   "dependencies": {
     "@circle-fin/adapter-viem-v2": "^1.18.0",

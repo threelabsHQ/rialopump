@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { clsx } from "clsx";
 import { tokenIdToBytes } from "../rialo/chain";
 import { buildBuyIx, buildSellIx } from "../rialo/program";
+import { fmtPumpPrice } from "../utils/crypto";
 import type { RialoInstruction } from "../rialo/program";
 
 interface QuoteResult {
@@ -266,7 +267,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
           <div className="flex justify-between text-xs">
             <span style={{ color: "var(--muted)" }}>Price per token</span>
             <span className="font-medium tabular-nums" style={{ color: "var(--ink)" }}>
-              {(quote.currentPrice || 0).toExponential(3)} RLO
+              {fmtPumpPrice(quote.currentPrice || 0, 4)} RLO
             </span>
           </div>
         </div>

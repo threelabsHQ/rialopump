@@ -9,7 +9,7 @@ import { CreatorPanel } from "../components/CreatorPanel";
 import { TokenAvatar } from "../components/ui/TokenAvatar";
 import { GlassCard } from "../components/ui/GlassCard";
 import { ProgressBar } from "../components/ui/ProgressBar";
-import { shortenAddress, formatLargeNumber, timeAgo } from "../utils/crypto";
+import { shortenAddress, formatLargeNumber, timeAgo, fmtPumpPrice } from "../utils/crypto";
 import { ArrowLeft, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -136,11 +136,14 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
 function TokenInfo({ token, trades }: { token: Token; trades: TradeRecord[] }) {
   const copy = (text: string) => { void navigator.clipboard.writeText(text).then(() => toast.success("Copied")); };
 
+  const price = token.currentPrice ?? 0;
   const stats = [
+    { label: "Price",        value: `${fmtPumpPrice(price, 4)} RLO` },
     { label: "Total Supply", value: formatLargeNumber(token.totalSupply) },
-    { label: "Tokens Sold", value: formatLargeNumber(token.tokenSupply) },
-    { label: "Mkt Cap", value: `${token.marketCap >= 0.001 ? token.marketCap.toFixed(3) : token.marketCap.toExponential(2)} RLO` },
-    { label: "Trades", value: token.tradeCount?.toString() || trades.length.toString() },
+    { label: "Tokens Sold",  value: formatLargeNumber(token.tokenSupply) },
+    { label: "Mkt Cap",      value: token.tokenSupply > 0 ? `${token.marketCap >= 0.001 ? token.marketCap.toFixed(3) : fmtPumpPrice(token.marketCap, 3)} RLO` : "—" },
+    { label: "Trades",       value: token.tradeCount?.toString() || trades.length.toString() },
+    { label: "Creator Tax",  value: `${((token.tokenTaxBps ?? 0) / 100).toFixed(1)}%` },
   ];
 
   return (
@@ -149,7 +152,7 @@ function TokenInfo({ token, trades }: { token: Token; trades: TradeRecord[] }) {
       {token.description && (
         <p className="text-sm" style={{ color: "var(--muted)" }}>{token.description}</p>
       )}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         {stats.map((s) => (
           <div key={s.label} className="rounded-xl p-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--border)" }}>
             <p className="text-xs" style={{ color: "var(--muted)" }}>{s.label}</p>

@@ -84,6 +84,26 @@ export function shortenAddress(addr: string, chars = 4): string {
   return `${addr.slice(0, chars)}...${addr.slice(-chars)}`;
 }
 
+/**
+ * pump.fun-style compact price notation.
+ * Values with many leading zeros after the decimal use subscript zero count:
+ *   3.00e-8 → "0.0(7)3"   (7 zeros after decimal, then sig figs)
+ *   0.00034 → "0.0003400"  (≤3 zeros: just fixed decimal)
+ *   1.23    → "1.2300"
+ */
+export function fmtPumpPrice(val: number, sigFigs = 4): string {
+  if (val === 0) return "0";
+  if (val >= 0.01) return val.toFixed(sigFigs);
+  // Count leading zeros after "0."
+  const s = val.toFixed(30);
+  const dec = s.split(".")[1] ?? "";
+  let zeros = 0;
+  while (zeros < dec.length && dec[zeros] === "0") zeros++;
+  const sig = dec.slice(zeros, zeros + sigFigs).replace(/0+$/, "") || "0";
+  if (zeros <= 3) return val.toFixed(zeros + sigFigs);
+  return `0.0(${zeros})${sig}`;
+}
+
 export function formatRlo(kelvin: number, decimals = 4): string {
   const rlo = kelvin / 1_000_000_000;
   if (rlo < 0.0001) return rlo.toExponential(2);

@@ -12,6 +12,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+// Serve Vite-built frontend in production
+const DIST = path.join(path.dirname(new URL(import.meta.url).pathname), "../dist");
+if (fs.existsSync(DIST)) {
+  app.use(express.static(DIST));
+}
+
 // ─── Rialo client ─────────────────────────────────────────────────────────────
 const RPC_URL = process.env.RIALO_DEVNET_RPC || "https://devnet.rialo.io:4101";
 const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk";
@@ -801,6 +807,13 @@ app.post("/wallet/generate", (_req, res) => {
   const secret = randomBytes(32);
   res.json({ secretHex: secret.toString("hex"), note: "Store safely — this is your wallet key on Rialo devnet." });
 });
+
+// SPA fallback — serve index.html for all non-API routes in production
+if (fs.existsSync(DIST)) {
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(DIST, "index.html"));
+  });
+}
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
