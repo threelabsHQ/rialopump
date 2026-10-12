@@ -131,6 +131,14 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
       setTxState("success");
       setAmount("");
       setQuote(null);
+      // Refresh balances after trade so the UI reflects the deduction immediately
+      if (wallet) {
+        void api.balance(wallet.pubkey).then((b) => setRloBalance(parseFloat(b.rlo)));
+        void api.portfolio(wallet.pubkey).then((p) => {
+          const h = p.find((h) => h.token.id === token.id);
+          setTokenBalance(h?.balance ?? 0);
+        });
+      }
       void onTrade();
     } catch (e: unknown) {
       setErrorMsg(e instanceof Error ? e.message : String(e));

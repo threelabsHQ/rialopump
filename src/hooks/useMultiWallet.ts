@@ -226,7 +226,10 @@ export function useMultiWallet() {
       const kp = keypairFromHex(genWallet.secretHex);
       const tx = buildTx(instructions, kp.publicKey, configHashPrefix);
       tx.sign(kp);
-      return btoa(String.fromCharCode(...tx.serialize()));
+      const bytes = tx.serialize();
+      // Safe base64 — btoa(String.fromCharCode(...bytes)) overflows the call
+      // stack on large buffers. Use Buffer (available via bun/node polyfill).
+      return Buffer.from(bytes).toString("base64");
     }
 
     if (type === "extension" && extAccount) {
@@ -235,7 +238,7 @@ export function useMultiWallet() {
       // Let the extension sign — pops wallet approval UI
       const result = await frostSignTx({ transaction: tx.serialize() });
       // result.signedTransaction is Uint8Array of the fully-signed tx
-      return btoa(String.fromCharCode(...result.signedTransaction));
+      return Buffer.from(result.signedTransaction).toString("base64");
     }
 
     if (type === "playground") {

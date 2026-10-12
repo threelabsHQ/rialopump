@@ -591,29 +591,18 @@ app.post("/tokens/:id/buy", async (req, res) => {
       trader?: string; rloAmount?: number; signedTxBase64?: string;
     };
     if (!trader || !rloFloat) return res.status(400).json({ error: "trader and rloAmount required" });
+    if (!signedTxBase64) return res.status(400).json({ error: "signedTxBase64 required — sign the transaction in your wallet first" });
     // Convert RLO → kelvin for all internal math
     const rloKelvin = rloToKelvin(rloFloat);
 
-    let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 16);
-    let onchain = false;
-
-    if (signedTxBase64) {
-      try {
-        const txBytes = Buffer.from(signedTxBase64, "base64");
-        txHash = await sendAndConfirm(txBytes);
-        onchain = true;
-      } catch (e: unknown) {
-        return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
-      }
-    } else {
-      const pk = PublicKey.fromString(trader);
-      const balance = await client.getBalance(pk);
-      if (Number(balance) < rloKelvin) {
-        return res.status(400).json({ error: "Insufficient RLO balance" });
-      }
+    let txHash: string;
+    try {
+      const txBytes = Buffer.from(signedTxBase64, "base64");
+      txHash = await sendAndConfirm(txBytes);
+    } catch (e: unknown) {
+      return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
     }
-
-    if (onchain) await syncOnchainState(t);
+    await syncOnchainState(t);
     const state    = buildVirtualState(t);
     const taxBps   = t.tokenTaxBps || 0;
     const fee      = Math.floor(rloKelvin * PLATFORM_FEE_BPS / 10_000);
@@ -627,22 +616,16 @@ app.post("/tokens/:id/buy", async (req, res) => {
       id: uuidv4().replace(/-/g, "").slice(0, 16),
       type: "buy",
       trader,
-      rloAmount: rloKelvin,        // stored in kelvin
+      rloAmount: rloKelvin,
       tokenAmount: limitedTokens,
       price: kelvinToRlo(rloKelvin) / limitedTokens,
       timestamp: Date.now(),
       txHash,
-      onchain,
+      onchain: true,
     };
 
     t.trades.push(trade);
-    if (!onchain) {
-      t.tokenSupply += limitedTokens;
-      t.realRloRaised = (t.realRloRaised || 0) + into;
-      if (t.realRloRaised >= GRADUATION_RLO_TARGET) t.graduated = true;
-    } else {
-      await syncOnchainState(t);
-    }
+    await syncOnchainState(t);
     const newState = buildVirtualState(t);
     t.marketCap = kelvinToRlo(newState.currentPrice) * t.tokenSupply;
     tokens.set(t.id, t);
@@ -670,28 +653,17 @@ app.post("/tokens/:id/sell", async (req, res) => {
       trader?: string; tokenAmount?: number; signedTxBase64?: string;
     };
     if (!trader || !tokenAmount) return res.status(400).json({ error: "trader and tokenAmount required" });
+    if (!signedTxBase64) return res.status(400).json({ error: "signedTxBase64 required — sign the transaction in your wallet first" });
 
-    let txHash = "sim_" + uuidv4().replace(/-/g, "").slice(0, 16);
-    let onchain = false;
-
-    if (signedTxBase64) {
-      try {
-        const txBytes = Buffer.from(signedTxBase64, "base64");
-        txHash = await sendAndConfirm(txBytes);
-        onchain = true;
-      } catch (e: unknown) {
-        return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
-      }
-    } else {
-      const traderBal =
-        t.trades.filter((tr) => tr.trader === trader && tr.type === "buy").reduce((s, tr) => s + tr.tokenAmount, 0) -
-        t.trades.filter((tr) => tr.trader === trader && tr.type === "sell").reduce((s, tr) => s + tr.tokenAmount, 0);
-      if (traderBal < tokenAmount) {
-        return res.status(400).json({ error: `Insufficient token balance. You hold ${traderBal}.` });
-      }
+    let txHash: string;
+    try {
+      const txBytes = Buffer.from(signedTxBase64, "base64");
+      txHash = await sendAndConfirm(txBytes);
+    } catch (e: unknown) {
+      return res.status(400).json({ error: `Transaction failed: ${e instanceof Error ? e.message : String(e)}` });
     }
 
-    if (onchain) await syncOnchainState(t);
+    await syncOnchainState(t);
     const state       = buildVirtualState(t);
     const taxBps      = t.tokenTaxBps || 0;
     const { rloOut: rloGross } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
@@ -709,16 +681,11 @@ app.post("/tokens/:id/sell", async (req, res) => {
       price: kelvinToRlo(rloAfterFee) / tokenAmount,
       timestamp: Date.now(),
       txHash,
-      onchain,
+      onchain: true,
     };
 
     t.trades.push(trade);
-    if (!onchain) {
-      t.tokenSupply -= tokenAmount;
-      t.realRloRaised = Math.max(0, (t.realRloRaised || 0) - rloGross);
-    } else {
-      await syncOnchainState(t);
-    }
+    await syncOnchainState(t);
     const newState = buildVirtualState(t);
     t.marketCap = kelvinToRlo(newState.currentPrice) * t.tokenSupply;
     tokens.set(t.id, t);
