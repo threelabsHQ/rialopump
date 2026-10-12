@@ -1,3 +1,4 @@
+// v2 — redeploy to align with u32 borsh discriminant fix in TypeScript SDK
 use borsh::{BorshDeserialize, BorshSerialize};
 use rialo_s_program::{
     account_info::{next_account_info, AccountInfo},
