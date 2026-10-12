@@ -110,7 +110,7 @@ export function TradePanel({ token, wallet, signTx, onTrade }: TradePanelProps) 
         if (rloFloat > rloBalance) { throw new Error(`Insufficient balance. You have ${rloBalance.toFixed(4)} RLO`); }
         const kelvin = BigInt(Math.round(rloFloat * KELVIN));
         const minTokensOut = quote?.tokensOut ? BigInt(Math.floor(quote.tokensOut * 0.95)) : 0n;
-        const ix = buildBuyIx({ tokenId: tokenIdBytes, buyer: traderPk, rloAmount: kelvin, minTokensOut });
+        const ix = buildBuyIx({ tokenId: tokenIdBytes, trader: traderPk, rloAmount: kelvin, minTokensOut });
         const signedTxBase64 = await signTx([ix]);
         setTxState("confirming");
         const result = await api.buy(token.id, wallet.pubkey, rloFloat, signedTxBase64);

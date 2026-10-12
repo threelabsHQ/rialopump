@@ -20,7 +20,7 @@ if (fs.existsSync(DIST)) {
 
 // ─── Rialo client ─────────────────────────────────────────────────────────────
 const RPC_URL = process.env.RIALO_DEVNET_RPC || "https://devnet.rialo.io:4101";
-const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk";
+const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID || "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s";
 const client: RialoClient = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
 
 /**

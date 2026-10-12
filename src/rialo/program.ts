@@ -26,7 +26,7 @@ import type { Transaction } from "@rialo/ts-cdk";
 
 export const PROGRAM_ID_STR: string =
   (import.meta.env as Record<string, string | undefined>).VITE_PROGRAM_ID
-  ?? "CDy4MtWvAJyLfQBU4TLK7ZDDapPeq9SqSqvC65HVdESk";
+  ?? "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s";
 
 export const PROGRAM_ID = PublicKey.fromString(PROGRAM_ID_STR);
 export const SYSTEM_PK  = PublicKey.fromString(SYSTEM_PROGRAM_ID);
@@ -366,7 +366,7 @@ export function buildCreateTokenIx(params: {
 
 export function buildBuyIx(params: {
   tokenId: Uint8Array;
-  buyer: PublicKey;
+  trader: PublicKey;
   rloAmount: bigint | number;
   minTokensOut: bigint | number;
 }): RialoInstruction {
@@ -375,7 +375,7 @@ export function buildBuyIx(params: {
   return {
     programId: PROGRAM_ID,
     accounts: [
-      { pubkey: params.buyer,   isSigner: true,  isWritable: true  },
+      { pubkey: params.trader,  isSigner: true,  isWritable: true  },
       { pubkey: tokenStatePda,  isSigner: false, isWritable: true  },
       { pubkey: feeVaultPda,    isSigner: false, isWritable: true  },
       { pubkey: SYSTEM_PK,      isSigner: false, isWritable: false },
