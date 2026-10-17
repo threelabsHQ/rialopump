@@ -13,8 +13,8 @@ binding = "ASSETS"
 # Then paste the returned id below and also create a preview namespace for local wrangler dev.
 [[kv_namespaces]]
 binding = "TOKENS_KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
+id = "12688435b0f44aa5b710ca6c345d048d"
+preview_id = "fb81c834ac6141e4af05dd9905cc085e"
 
 # Environment variables (non-secret — override secrets in the CF dashboard)
 [vars]
