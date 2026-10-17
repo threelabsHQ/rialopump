@@ -325,12 +325,11 @@ export function buildTx(
   instructions: RialoInstruction[],
   feePayer: PublicKey,
   configHashPrefix: bigint,
-  validFromUs?: bigint,
+  validFromMs?: bigint,
 ): Transaction {
-  // Rialo setValidFrom expects microseconds (µs), not milliseconds.
-  // Subtract 5s (5_000_000 µs) so the tx is already valid on arrival despite
-  // clock skew and the CF Worker → devnet network hop.
-  const validFrom = validFromUs ?? (BigInt(Date.now()) * 1000n - 5_000_000n);
+  // SDK setValidFrom expects milliseconds since Unix epoch (per @rialo/ts-cdk docs).
+  // Subtract 10 s to absorb clock skew between browser/Worker and devnet validator.
+  const validFrom = validFromMs ?? (BigInt(Date.now()) - 10_000n);
   let builder = makeTxBuilder()
     .setPayer(feePayer)
     .setValidFrom(validFrom)
