@@ -42,11 +42,18 @@ class FsKV implements KVNamespace {
   }
 }
 
-// ─── Rialo client ─────────────────────────────────────────────────────────────
-const RPC_URL        = process.env.RIALO_DEVNET_RPC    || "https://devnet.rialo.io:4101";
-const PROGRAM_ID_STR = process.env.VITE_PROGRAM_ID     || "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s";
-const RLO_USD_RATE   = parseFloat(process.env.RLO_USD_RATE ?? "0.10");
-const client: RialoClient = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
+// ─── Rialo client (lazy — not created at module evaluation time) ──────────────
+// Deferring construction avoids CF Worker startup failures when the SDK tries
+// to resolve network endpoints during module initialisation.
+const RPC_URL        = () => process.env.RIALO_DEVNET_RPC    || "https://devnet.rialo.io:4101";
+const PROGRAM_ID_STR = () => process.env.VITE_PROGRAM_ID     || "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s";
+const RLO_USD_RATE   = () => parseFloat(process.env.RLO_USD_RATE ?? "0.10");
+
+let _client: RialoClient | null = null;
+function getClient(): RialoClient {
+  if (!_client) _client = createRialoClient({ chain: RIALO_DEVNET_CHAIN });
+  return _client;
+}
 
 function sigToBase58(sig: Uint8Array): string {
   const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -70,7 +77,7 @@ async function pollConfirm(sigBytes: Uint8Array, maxMs = 60_000): Promise<void> 
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     try {
-      const statuses = await client.getSignatureStatuses([sigBytes]);
+      const statuses = await getClient().getSignatureStatuses([sigBytes]);
       const s = statuses?.[0];
       if (s && !s.err) return;
       if (s?.err) throw new Error(`Transaction failed: ${JSON.stringify(s.err)}`);
@@ -84,12 +91,12 @@ async function pollConfirm(sigBytes: Uint8Array, maxMs = 60_000): Promise<void> 
 
 async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
   try {
-    const confirmed = await client.sendAndConfirmTransaction(txBytes);
+    const confirmed = await getClient().sendAndConfirmTransaction(txBytes);
     return confirmed.signature;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("timed out") || msg.includes("TRANSACTION_CONFIRMATION_TIMEOUT") || msg.includes("timeout")) {
-      const sig = await client.sendTransaction(txBytes);
+      const sig = await getClient().sendTransaction(txBytes);
       await new Promise((r) => setTimeout(r, 5_000));
       return sig;
     }
@@ -98,7 +105,7 @@ async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
 }
 
 async function airdropAndConfirm(pk: PublicKey, kelvin: bigint): Promise<string> {
-  const sigBytes = await client.requestAirdrop(pk, kelvin);
+  const sigBytes = await getClient().requestAirdrop(pk, kelvin);
   await pollConfirm(sigBytes);
   return sigToBase58(sigBytes);
 }
@@ -175,8 +182,8 @@ function tokenIdToBytes(idHex: string): Uint8Array {
 async function syncOnchainState(t: TokenRecord): Promise<void> {
   if (!t.onchain) return;
   try {
-    const { pda } = deriveTokenStatePda(tokenIdToBytes(t.tokenIdHex), PublicKey.fromString(PROGRAM_ID_STR));
-    const info = await client.getAccountInfo(pda);
+    const { pda } = deriveTokenStatePda(tokenIdToBytes(t.tokenIdHex), PublicKey.fromString(PROGRAM_ID_STR()));
+    const info = await getClient().getAccountInfo(pda);
     if (!info?.data) return;
     const raw = Array.isArray(info.data) ? (info.data as [string, string])[0] : (info.data as string);
     const data = info.data instanceof Uint8Array ? info.data : new Uint8Array(Buffer.from(raw, "base64"));
@@ -234,7 +241,7 @@ export function createApp(kv?: KVNamespace): express.Express {
   app.use(async (_req, _res, next) => { await ensureLoaded(); next(); });
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", rpc: RPC_URL, programId: PROGRAM_ID_STR });
+    res.json({ status: "ok", rpc: RPC_URL(), programId: PROGRAM_ID_STR() });
   });
 
   app.get("/deployer", (_req, res) => {
@@ -244,14 +251,14 @@ export function createApp(kv?: KVNamespace): express.Express {
 
   app.get("/chain", async (_req, res) => {
     try {
-      const [height, epoch] = await Promise.all([client.getBlockHeight(), client.getEpochInfo()]);
+      const [height, epoch] = await Promise.all([getClient().getBlockHeight(), getClient().getEpochInfo()]);
       res.json({ blockHeight: height.toString(), epoch: epoch.epoch.toString(), slot: epoch.absoluteSlot.toString() });
     } catch (e: unknown) { res.status(500).json({ error: e instanceof Error ? e.message : String(e) }); }
   });
 
   app.post("/rpc/config-hash", async (_req, res) => {
     try {
-      const v = (await client.getConfigHashPrefix()).toString();
+      const v = (await getClient().getConfigHashPrefix()).toString();
       res.json({ configHashPrefix: v, configHash: v });
     } catch (e: unknown) { res.status(500).json({ error: e instanceof Error ? e.message : String(e) }); }
   });
@@ -275,7 +282,7 @@ export function createApp(kv?: KVNamespace): express.Express {
 
   app.get("/balance/:pubkey", async (req, res) => {
     try {
-      const bal = await client.getBalance(PublicKey.fromString(req.params.pubkey));
+      const bal = await getClient().getBalance(PublicKey.fromString(req.params.pubkey));
       res.json({ kelvin: bal.toString(), rlo: (Number(bal) / KELVIN_PER_RLO).toFixed(6) });
     } catch (e: unknown) { res.status(500).json({ error: e instanceof Error ? e.message : String(e) }); }
   });
@@ -291,8 +298,8 @@ export function createApp(kv?: KVNamespace): express.Express {
         imageUrl: t.imageUrl, creator: t.creator, createdAt: t.createdAt,
         tokenSupply: t.tokenSupply, totalSupply: t.totalSupply, graduated: t.graduated,
         tradeCount: t.trades.length, currentPrice: kelvinToRlo(vs.currentPrice),
-        marketCap: t.marketCap, priceUsd: kelvinToRlo(vs.currentPrice) * RLO_USD_RATE,
-        marketCapUsd: t.marketCap * RLO_USD_RATE,
+        marketCap: t.marketCap, priceUsd: kelvinToRlo(vs.currentPrice) * RLO_USD_RATE(),
+        marketCapUsd: t.marketCap * RLO_USD_RATE(),
         progressPct: Math.min(100, (rloRaisedK / GRADUATION_RLO_TARGET) * 100),
         tokenTaxBps: t.tokenTaxBps || 0, creatorEarnings: t.creatorEarnings || 0,
         realRloRaised: kelvinToRlo(rloRaisedK), graduationTarget: kelvinToRlo(GRADUATION_RLO_TARGET),
@@ -311,8 +318,8 @@ export function createApp(kv?: KVNamespace): express.Express {
       imageUrl: t.imageUrl, creator: t.creator, createdAt: t.createdAt,
       tokenSupply: t.tokenSupply, totalSupply: t.totalSupply, graduated: t.graduated,
       tradeCount: t.trades.length, currentPrice: kelvinToRlo(state.currentPrice),
-      marketCap: t.marketCap, priceUsd: kelvinToRlo(state.currentPrice) * RLO_USD_RATE,
-      marketCapUsd: t.marketCap * RLO_USD_RATE,
+      marketCap: t.marketCap, priceUsd: kelvinToRlo(state.currentPrice) * RLO_USD_RATE(),
+      marketCapUsd: t.marketCap * RLO_USD_RATE(),
       progressPct: Math.min(100, ((t.realRloRaised || state.realRloRaised) / GRADUATION_RLO_TARGET) * 100),
       virtualRlo: kelvinToRlo(state.virtualRlo), realRloRaised: kelvinToRlo(t.realRloRaised || state.realRloRaised),
       graduationTarget: kelvinToRlo(GRADUATION_RLO_TARGET), tokenTaxBps: t.tokenTaxBps || 0,
