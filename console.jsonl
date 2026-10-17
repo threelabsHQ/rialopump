@@ -225,3 +225,5 @@
 {"level":"debug","message":"[vite] hot updated: /src/components/CreateTokenForm.tsx","timestamp":1792275690343}
 {"level":"debug","message":"[vite] hot updated: /src/components/TradePanel.tsx","timestamp":1792275690344}
 {"level":"debug","message":"[vite] hot updated: /src/components/CreatorPanel.tsx","timestamp":1792275690345}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792275958135}
+{"level":"debug","message":"[vite] connected.","timestamp":1792276036450}

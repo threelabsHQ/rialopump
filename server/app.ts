@@ -153,13 +153,23 @@ async function pollConfirm(sigBytes: Uint8Array, maxMs = 60_000): Promise<void> 
 }
 async function sendAndConfirm(txBytes: Uint8Array | Buffer): Promise<string> {
   try {
-    return (await getClient().sendAndConfirmTransaction(txBytes)).signature;
+    const result = await getClient().sendAndConfirmTransaction(txBytes);
+    // SDK may return { signature: Uint8Array } or a string depending on version
+    const raw = typeof result === "string" ? result
+      : result && typeof (result as Record<string,unknown>).signature !== "undefined"
+        ? (result as Record<string,unknown>).signature
+        : result;
+    if (raw instanceof Uint8Array) return sigToBase58(raw);
+    if (typeof raw === "string") return raw;
+    return sigToBase58(txBytes.slice(0, 64) as Uint8Array); // fallback: first 64 bytes are sig
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("timed out") || msg.includes("timeout")) {
-      const sig = await getClient().sendTransaction(txBytes);
+      const sigRaw = await getClient().sendTransaction(txBytes);
       await new Promise(r => setTimeout(r, 5_000));
-      return sig;
+      if (sigRaw instanceof Uint8Array) return sigToBase58(sigRaw);
+      if (typeof sigRaw === "string") return sigRaw;
+      return sigToBase58(txBytes.slice(0, 64) as Uint8Array);
     }
     throw e;
   }
@@ -169,10 +179,18 @@ async function airdropAndConfirm(pk: PublicKey, kelvin: bigint): Promise<string>
   await pollConfirm(sigBytes);
   return sigToBase58(sigBytes);
 }
+function deriveTokenStatePdaServer(tokenId: Uint8Array): PublicKey {
+  const [pda] = PublicKey.findProgramAddress(
+    [new TextEncoder().encode("token"), tokenId],
+    PublicKey.fromString(getProgramId()),
+  );
+  return pda;
+}
+
 async function syncOnchainState(t: TokenRecord): Promise<void> {
   if (!t.onchain) return;
   try {
-    const { pda } = deriveTokenStatePda(tokenIdToBytes(t.tokenIdHex), PublicKey.fromString(getProgramId()));
+    const pda = deriveTokenStatePdaServer(tokenIdToBytes(t.tokenIdHex));
     const info = await getClient().getAccountInfo(pda);
     if (!info?.data) return;
     const raw = Array.isArray(info.data) ? (info.data as [string, string])[0] : (info.data as string);
@@ -417,17 +435,22 @@ export function createApp(kv?: KVNamespace): Hono {
       if (!signedTxBase64) return c.json({ error: "signedTxBase64 required" }, 400);
       const txHash = await sendAndConfirm(Buffer.from(signedTxBase64, "base64"));
       const rloK = rloToKelvin(rloFloat);
-      await syncOnchainState(t);
+      // Apply buy math immediately so UI is correct even before chain sync
       const state = buildVirtualState(t);
       const fee = Math.floor(rloK * PLATFORM_FEE_BPS / 10_000);
       const tax = Math.floor(rloK * (t.tokenTaxBps || 0) / 10_000);
-      const { tokensOut } = calcBuyTokens(rloK - fee - tax, state.virtualRlo, state.virtualTokens);
+      const netRlo = rloK - fee - tax;
+      const { tokensOut } = calcBuyTokens(netRlo, state.virtualRlo, state.virtualTokens);
       const limited = Math.min(tokensOut, TOTAL_SUPPLY - t.tokenSupply);
       if (limited <= 0) return c.json({ error: "No tokens available" }, 400);
+      // Update state immediately from confirmed tx
+      t.tokenSupply += limited;
+      t.realRloRaised += netRlo;
       const trade: TradeRecord = { id: uuidv4().replace(/-/g, "").slice(0, 16), type: "buy", trader,
         rloAmount: rloK, tokenAmount: limited, price: kelvinToRlo(rloK) / limited, timestamp: Date.now(), txHash, onchain: true };
       t.trades.push(trade);
-      await syncOnchainState(t);
+      // Best-effort onchain sync (may lag one block — that's fine)
+      await syncOnchainState(t).catch(() => {});
       const ns = buildVirtualState(t);
       t.marketCap = kelvinToRlo(ns.currentPrice) * t.tokenSupply;
       tokens.set(t.id, t); await persist();
@@ -448,17 +471,21 @@ export function createApp(kv?: KVNamespace): Hono {
       if (!trader || !tokenAmount) return c.json({ error: "trader and tokenAmount required" }, 400);
       if (!signedTxBase64) return c.json({ error: "signedTxBase64 required" }, 400);
       const txHash = await sendAndConfirm(Buffer.from(signedTxBase64, "base64"));
-      await syncOnchainState(t);
+      // Apply sell math immediately so UI reflects the trade before chain sync
       const state = buildVirtualState(t);
       const { rloOut: gross } = calcSellRlo(tokenAmount, state.virtualRlo, state.virtualTokens);
       const fee = Math.floor(gross * PLATFORM_FEE_BPS / 10_000);
       const tax = Math.floor(gross * (t.tokenTaxBps || 0) / 10_000);
       const rloAfter = gross - fee - tax;
       if (rloAfter <= 0) return c.json({ error: "Nothing to receive" }, 400);
+      // Update state immediately from confirmed tx
+      t.tokenSupply = Math.max(0, t.tokenSupply - tokenAmount);
+      t.realRloRaised = Math.max(0, t.realRloRaised - (gross - fee - tax));
       const trade: TradeRecord = { id: uuidv4().replace(/-/g, "").slice(0, 16), type: "sell", trader,
         rloAmount: rloAfter, tokenAmount, price: kelvinToRlo(rloAfter) / tokenAmount, timestamp: Date.now(), txHash, onchain: true };
       t.trades.push(trade);
-      await syncOnchainState(t);
+      // Best-effort onchain sync
+      await syncOnchainState(t).catch(() => {});
       const ns = buildVirtualState(t);
       t.marketCap = kelvinToRlo(ns.currentPrice) * t.tokenSupply;
       tokens.set(t.id, t); await persist();
