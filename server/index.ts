@@ -1,24 +1,28 @@
 /**
- * server/index.ts — Local development entry point
- *
- * Imports the Express app from server/app.ts and starts listening.
- * In production the Worker entry (worker.ts) is used instead.
+ * server/index.ts — local development entry point
+ * Runs the Hono app via @hono/node-server (full Node.js HTTP server).
+ * In production the CF Worker (worker.ts) calls app.fetch() directly.
  */
+import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { createApp, FsKV } from "./app.js";
 import path from "path";
-import fs from "fs";
-import { createApp } from "./app.js";
+import { fileURLToPath } from "url";
 
-const app = createApp(); // uses fs-based KV (tokens.json) in local dev
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DIST = path.join(__dirname, "../dist");
 
-// Serve Vite-built frontend in production / local preview
-const DIST = path.join(path.dirname(new URL(import.meta.url).pathname), "../dist");
-if (fs.existsSync(DIST)) {
-  const { default: express } = await import("express");
-  app.use(express.static(DIST));
-  app.get("*", (_req, res) => res.sendFile(path.join(DIST, "index.html")));
+// Local dev uses fs-backed KV (server/tokens.json)
+const kv = new FsKV(path.join(__dirname, "tokens.json"));
+const app = createApp(kv);
+
+// Serve Vite dist in local preview mode
+import { existsSync } from "fs";
+if (existsSync(DIST)) {
+  app.use("/*", serveStatic({ root: "../dist" }));
 }
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`[rialo-launchpad] Server on :${PORT} | program: ${process.env.VITE_PROGRAM_ID || "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s"}`);
+const PORT = Number(process.env.PORT ?? 3001);
+serve({ fetch: app.fetch, port: PORT }, () => {
+  console.log(`[rialo-launchpad] Server on :${PORT}`);
 });
