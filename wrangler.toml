@@ -1,0 +1,26 @@
+name = "rialopump"
+main = "worker.ts"
+compatibility_date = "2026-10-17"
+
+# Workers Assets — serves the Vite dist/ bundle as static files.
+# Any path not matched by a static asset falls through to the Worker fetch handler.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+# KV namespace for token persistence.
+# Create the namespace once with: npx wrangler kv namespace create TOKENS_KV
+# Then paste the returned id below and also create a preview namespace for local wrangler dev.
+[[kv_namespaces]]
+binding = "TOKENS_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
+
+# Environment variables (non-secret — override secrets in the CF dashboard)
+[vars]
+VITE_PROGRAM_ID = "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s"
+RIALO_DEVNET_RPC = "https://devnet.rialo.io:4101"
+
+# Secrets (set via dashboard or `wrangler secret put`):
+#   ANTHROPIC_API_KEY   — enables full AI analysis (optional, falls back to heuristics)
+#   RIALO_DEPLOYER_SECRET_HEX — deployer keypair (optional)

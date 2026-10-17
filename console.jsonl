@@ -142,3 +142,14 @@
 {"level":"error","message":"Unhandled promise rejection: Error: WebSocket closed without opened.\n    at WebSocket.<anonymous> (https://id64kv22suoxilz3ogoea.preview.studio.arc.io/@vite/client:454:22)","timestamp":1791822931954,"stack":"Error: WebSocket closed without opened.\n    at WebSocket.<anonymous> (https://id64kv22suoxilz3ogoea.preview.studio.arc.io/@vite/client:454:22)"}
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792259320558}
 {"level":"debug","message":"[vite] connected.","timestamp":1792259471316}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792268327578}
+{"level":"debug","message":"[vite] hot updated: /src/App.tsx","timestamp":1792268327589}
+{"level":"debug","message":"[vite] hot updated: /src/views/HomeView.tsx","timestamp":1792268327591}
+{"level":"debug","message":"[vite] hot updated: /src/views/PortfolioView.tsx","timestamp":1792268327597}
+{"level":"debug","message":"[vite] hot updated: /src/components/CreateTokenForm.tsx","timestamp":1792268327601}
+{"level":"debug","message":"[vite] hot updated: /src/components/WalletPanel.tsx","timestamp":1792268327604}
+{"level":"debug","message":"[vite] hot updated: /src/views/TokenView.tsx","timestamp":1792268327606}
+{"level":"debug","message":"[vite] hot updated: /src/components/TradePanel.tsx","timestamp":1792268327610}
+{"level":"debug","message":"[vite] hot updated: /src/components/CreatorPanel.tsx","timestamp":1792268327612}
+{"level":"debug","message":"[vite] hot updated: /src/components/AIInsight.tsx","timestamp":1792268327614}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792268327616}

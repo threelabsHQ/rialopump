@@ -16,6 +16,9 @@ export interface PortfolioHolding {
   pnl: number;
 }
 
+// In local dev Vite proxies /api → localhost:3001 (see vite.config.ts).
+// In production (Cloudflare Workers) the Worker serves /api directly on the same domain,
+// so the relative path works unchanged.
 const BASE = "/api";
 
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {

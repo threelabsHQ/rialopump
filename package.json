@@ -31,6 +31,7 @@
     "@rialo/ts-cdk": "^0.18.1",
     "@tanstack/react-query": "^5.62.7",
     "@web3icons/react": "^4.0.0",
+    "@whatwg-node/server": "^0.13.0",
     "clsx": "^2.1.1",
     "connectkit": "^1.9.2",
     "cors": "^2.8.6",
@@ -45,7 +46,8 @@
     "tailwind-merge": "^2.6.0",
     "uuid": "^14.0.2",
     "viem": "^2.56.3",
-    "wagmi": "^2.19.5"
+    "wagmi": "^2.19.5",
+    "wrangler": "^4.151.1"
   },
   "overrides": {
     "viem": "^2.56.3"
