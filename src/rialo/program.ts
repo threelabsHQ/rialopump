@@ -26,7 +26,7 @@ import type { Transaction } from "@rialo/ts-cdk";
 
 export const PROGRAM_ID_STR: string =
   (import.meta.env as Record<string, string | undefined>).VITE_PROGRAM_ID
-  ?? "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s";
+  ?? "FxZEDfRsTmjYY4gaTXcr6Hjz9swwRyMwWgcfLX6BemAS";
 
 export const PROGRAM_ID = PublicKey.fromString(PROGRAM_ID_STR);
 export const SYSTEM_PK  = PublicKey.fromString(SYSTEM_PROGRAM_ID);
@@ -251,15 +251,14 @@ export function deriveFeeVaultPda(tokenId: Uint8Array): { pda: PublicKey; bump: 
 }
 
 // ─── Instruction encoders ─────────────────────────────────────────────────────
-// Borsh enum discriminant = variant index (matches LaunchpadInstruction in instruction.rs):
+// Borsh enum discriminant = variant index as u8 (standard Borsh for #[derive(BorshSerialize)]).
 //   0=CreateToken  1=Buy  2=Sell  3=WithdrawFees  4=ClaimCreatorEarnings  5=UpdateTokenTax
-
 function encodeCreateToken(
   tokenId: Uint8Array, name: string, symbol: string,
   description: string, imageUrl: string, tokenTaxBps: bigint,
 ): Uint8Array {
   const w = new BorshWriter(512);
-  w.writeU32LE(0); // borsh enum discriminant is u32, not u8
+  w.writeU8(0); // variant 0 = CreateToken
   w.writeFixedBytes(tokenId);
   w.writeString(name); w.writeString(symbol);
   w.writeString(description); w.writeString(imageUrl);
@@ -269,33 +268,38 @@ function encodeCreateToken(
 
 function encodeBuy(tokenId: Uint8Array, rloAmount: bigint, minTokensOut: bigint): Uint8Array {
   const w = new BorshWriter();
-  w.writeU32LE(1); w.writeFixedBytes(tokenId);
+  w.writeU8(1); // variant 1 = Buy
+  w.writeFixedBytes(tokenId);
   w.writeU64LE(rloAmount); w.writeU64LE(minTokensOut);
   return w.toBytes();
 }
 
 function encodeSell(tokenId: Uint8Array, tokenAmount: bigint, minRloOut: bigint): Uint8Array {
   const w = new BorshWriter();
-  w.writeU32LE(2); w.writeFixedBytes(tokenId);
+  w.writeU8(2); // variant 2 = Sell
+  w.writeFixedBytes(tokenId);
   w.writeU64LE(tokenAmount); w.writeU64LE(minRloOut);
   return w.toBytes();
 }
 
 function encodeWithdrawFees(tokenId: Uint8Array): Uint8Array {
   const w = new BorshWriter();
-  w.writeU32LE(3); w.writeFixedBytes(tokenId);
+  w.writeU8(3); // variant 3 = WithdrawFees
+  w.writeFixedBytes(tokenId);
   return w.toBytes();
 }
 
 function encodeClaimCreatorEarnings(tokenId: Uint8Array): Uint8Array {
   const w = new BorshWriter();
-  w.writeU32LE(4); w.writeFixedBytes(tokenId);
+  w.writeU8(4); // variant 4 = ClaimCreatorEarnings
+  w.writeFixedBytes(tokenId);
   return w.toBytes();
 }
 
 function encodeUpdateTokenTax(tokenId: Uint8Array, newTaxBps: bigint): Uint8Array {
   const w = new BorshWriter();
-  w.writeU32LE(5); w.writeFixedBytes(tokenId);
+  w.writeU8(5); // variant 5 = UpdateTokenTax
+  w.writeFixedBytes(tokenId);
   w.writeU64LE(newTaxBps);
   return w.toBytes();
 }

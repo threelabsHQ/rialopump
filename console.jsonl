@@ -211,3 +211,17 @@
 {"level":"debug","message":"[vite] hot updated: /src/components/CreatorPanel.tsx","timestamp":1792274518432}
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792274573772}
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792274573774}
+{"level":"debug","message":"[vite] connected.","timestamp":1792275003739}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792275168573}
+{"level":"debug","message":"[vite] connected.","timestamp":1792275395064}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792275494553}
+{"level":"debug","message":"[vite] connected.","timestamp":1792275509507}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792275519682}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792275519684}
+{"level":"debug","message":"[vite] connected.","timestamp":1792275543987}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792275582587}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792275690337}
+{"level":"debug","message":"[vite] hot updated: /src/App.tsx","timestamp":1792275690341}
+{"level":"debug","message":"[vite] hot updated: /src/components/CreateTokenForm.tsx","timestamp":1792275690343}
+{"level":"debug","message":"[vite] hot updated: /src/components/TradePanel.tsx","timestamp":1792275690344}
+{"level":"debug","message":"[vite] hot updated: /src/components/CreatorPanel.tsx","timestamp":1792275690345}

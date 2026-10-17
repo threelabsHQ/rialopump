@@ -49,7 +49,7 @@ export class FsKV implements KVNamespace {
 // ─── Rialo client (lazy) ──────────────────────────────────────────────────────
 
 const getRpcUrl        = () => process.env.RIALO_DEVNET_RPC  || "https://devnet.rialo.io:4101";
-const getProgramId     = () => process.env.VITE_PROGRAM_ID   || "2PDinBj36DXxwXd9VR8vKes1c5MfP8QLEaVXDDAnNQ1s";
+const getProgramId     = () => process.env.VITE_PROGRAM_ID   || "FxZEDfRsTmjYY4gaTXcr6Hjz9swwRyMwWgcfLX6BemAS";
 const getRloUsdRate    = () => parseFloat(process.env.RLO_USD_RATE ?? "0.10");
 
 let _client: RialoClient | null = null;
