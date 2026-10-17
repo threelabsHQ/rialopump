@@ -140,3 +140,5 @@
 {"level":"error","message":"Unhandled promise rejection: Error: WebSocket closed without opened.\n    at WebSocket.<anonymous> (https://id64kv22suoxilz3ogoea.preview.studio.arc.io/@vite/client:454:22)","timestamp":1791822784091,"stack":"Error: WebSocket closed without opened.\n    at WebSocket.<anonymous> (https://id64kv22suoxilz3ogoea.preview.studio.arc.io/@vite/client:454:22)"}
 {"level":"error","message":"[vite] failed to connect to websocket (Error: WebSocket closed without opened.). ","timestamp":1791822931920}
 {"level":"error","message":"Unhandled promise rejection: Error: WebSocket closed without opened.\n    at WebSocket.<anonymous> (https://id64kv22suoxilz3ogoea.preview.studio.arc.io/@vite/client:454:22)","timestamp":1791822931954,"stack":"Error: WebSocket closed without opened.\n    at WebSocket.<anonymous> (https://id64kv22suoxilz3ogoea.preview.studio.arc.io/@vite/client:454:22)"}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792259320558}
+{"level":"debug","message":"[vite] connected.","timestamp":1792259471316}
