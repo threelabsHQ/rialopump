@@ -318,16 +318,19 @@ function makeTxBuilder(): TxBuilderLike {
 /**
  * Build a Transaction from a list of instructions.
  * - setPayer: the account paying the tx fee
- * - setValidFrom: current time in ms since Unix epoch (timestamp-based replay protection)
+ * - setValidFrom: current time in µs since Unix epoch (timestamp-based replay protection)
  * - setConfigHashPrefix: from client.getConfigHashPrefix() (epoch-level chain ID)
  */
 export function buildTx(
   instructions: RialoInstruction[],
   feePayer: PublicKey,
   configHashPrefix: bigint,
-  validFromMs?: bigint,
+  validFromUs?: bigint,
 ): Transaction {
-  const validFrom = validFromMs ?? BigInt(Date.now());
+  // Rialo setValidFrom expects microseconds (µs), not milliseconds.
+  // Subtract 5s (5_000_000 µs) so the tx is already valid on arrival despite
+  // clock skew and the CF Worker → devnet network hop.
+  const validFrom = validFromUs ?? (BigInt(Date.now()) * 1000n - 5_000_000n);
   let builder = makeTxBuilder()
     .setPayer(feePayer)
     .setValidFrom(validFrom)
