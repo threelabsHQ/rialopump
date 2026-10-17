@@ -238,22 +238,25 @@ export function createApp(kv?: KVNamespace): Hono {
   const secretHex = process.env.RIALO_DEPLOYER_SECRET_HEX;
   if (secretHex) deployerKeypair = Keypair.fromSecretKey(new Uint8Array(Buffer.from(secretHex, "hex")));
 
+  // Outer app: serves static assets (Workers Assets) + mounts API under /api
   const app = new Hono();
   app.use("*", cors());
 
-  // Hydrate token store before each request
-  app.use("*", async (_c, next) => { await ensureLoaded(); await next(); });
+  // All API routes live on this sub-app, mounted at /api below.
+  // This matches what the browser fetches: /api/tokens, /api/chain, etc.
+  const api = new Hono();
+  api.use("*", async (_c, next) => { await ensureLoaded(); await next(); });
 
   // ── Health ────────────────────────────────────────────────────────────────
 
-  app.get("/health", (c) => c.json({ status: "ok", rpc: getRpcUrl(), programId: getProgramId() }));
+  api.get("/health", (c) => c.json({ status: "ok", rpc: getRpcUrl(), programId: getProgramId() }));
 
-  app.get("/deployer", (c) => {
+  api.get("/deployer", (c) => {
     if (!deployerKeypair) return c.json({ error: "No deployer key" }, 503);
     return c.json({ pubkey: deployerKeypair.publicKey.toString() });
   });
 
-  app.get("/chain", async (c) => {
+  api.get("/chain", async (c) => {
     try {
       const [height, epoch] = await Promise.all([getClient().getBlockHeight(), getClient().getEpochInfo()]);
       return c.json({ blockHeight: height.toString(), epoch: epoch.epoch.toString(), slot: epoch.absoluteSlot.toString() });
@@ -262,12 +265,12 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── RPC proxy ─────────────────────────────────────────────────────────────
 
-  app.post("/rpc/config-hash", async (c) => {
+  api.post("/rpc/config-hash", async (c) => {
     try { const v = (await getClient().getConfigHashPrefix()).toString(); return c.json({ configHashPrefix: v, configHash: v }); }
     catch (e) { return c.json({ error: String(e) }, 500); }
   });
 
-  app.post("/rpc/send-tx", async (c) => {
+  api.post("/rpc/send-tx", async (c) => {
     try {
       const { txBase64 } = await c.req.json<{ txBase64?: string }>();
       if (!txBase64) return c.json({ error: "txBase64 required" }, 400);
@@ -275,7 +278,7 @@ export function createApp(kv?: KVNamespace): Hono {
     } catch (e) { return c.json({ error: String(e) }, 500); }
   });
 
-  app.post("/airdrop", async (c) => {
+  api.post("/airdrop", async (c) => {
     try {
       const { pubkey, amount } = await c.req.json<{ pubkey?: string; amount?: number }>();
       if (!pubkey) return c.json({ error: "pubkey required" }, 400);
@@ -286,7 +289,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Balance ───────────────────────────────────────────────────────────────
 
-  app.get("/balance/:pubkey", async (c) => {
+  api.get("/balance/:pubkey", async (c) => {
     try {
       const bal = await getClient().getBalance(PublicKey.fromString(c.req.param("pubkey")));
       return c.json({ kelvin: bal.toString(), rlo: (Number(bal) / KELVIN_PER_RLO).toFixed(6) });
@@ -295,7 +298,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Token list ────────────────────────────────────────────────────────────
 
-  app.get("/tokens", async (c) => {
+  api.get("/tokens", async (c) => {
     const list = Array.from(tokens.values());
     await Promise.allSettled(list.map(syncOnchainState));
     return c.json(list.sort((a, b) => b.marketCap - a.marketCap).map(tokenView));
@@ -303,7 +306,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Single token ──────────────────────────────────────────────────────────
 
-  app.get("/tokens/:id", async (c) => {
+  api.get("/tokens/:id", async (c) => {
     const t = tokens.get(c.req.param("id"));
     if (!t) return c.json({ error: "Token not found" }, 404);
     await syncOnchainState(t);
@@ -315,7 +318,7 @@ export function createApp(kv?: KVNamespace): Hono {
     });
   });
 
-  app.get("/tokens/:id/state", async (c) => {
+  api.get("/tokens/:id/state", async (c) => {
     const t = tokens.get(c.req.param("id"));
     if (!t) return c.json(null, 404);
     await syncOnchainState(t);
@@ -331,7 +334,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Create token ──────────────────────────────────────────────────────────
 
-  app.post("/tokens", async (c) => {
+  api.post("/tokens", async (c) => {
     try {
       const body = await c.req.json<{
         name?: string; symbol?: string; description?: string; imageUrl?: string;
@@ -379,15 +382,15 @@ export function createApp(kv?: KVNamespace): Hono {
       price: limited > 0 ? rloFloat / limited : 0, currentPrice: kelvinToRlo(state.currentPrice) });
   };
 
-  app.get("/tokens/:id/quote-buy", (c) => handleQuoteBuy(c.req.param("id"), Number(c.req.query("rloAmount")), c));
-  app.post("/tokens/:id/quote-buy", async (c) => {
+  api.get("/tokens/:id/quote-buy", (c) => handleQuoteBuy(c.req.param("id"), Number(c.req.query("rloAmount")), c));
+  api.post("/tokens/:id/quote-buy", async (c) => {
     const { rloAmount } = await c.req.json<{ rloAmount?: number }>();
     return handleQuoteBuy(c.req.param("id"), Number(rloAmount), c);
   });
 
   // ── Quote sell ────────────────────────────────────────────────────────────
 
-  app.get("/tokens/:id/quote-sell", (c) => {
+  api.get("/tokens/:id/quote-sell", (c) => {
     const t = tokens.get(c.req.param("id"));
     if (!t) return c.json({ error: "Token not found" }, 404);
     if (t.graduated) return c.json({ error: "Token graduated" }, 400);
@@ -404,7 +407,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Execute buy ───────────────────────────────────────────────────────────
 
-  app.post("/tokens/:id/buy", async (c) => {
+  api.post("/tokens/:id/buy", async (c) => {
     try {
       const t = tokens.get(c.req.param("id"));
       if (!t) return c.json({ error: "Token not found" }, 404);
@@ -436,7 +439,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Execute sell ──────────────────────────────────────────────────────────
 
-  app.post("/tokens/:id/sell", async (c) => {
+  api.post("/tokens/:id/sell", async (c) => {
     try {
       const t = tokens.get(c.req.param("id"));
       if (!t) return c.json({ error: "Token not found" }, 404);
@@ -466,7 +469,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Claim earnings ────────────────────────────────────────────────────────
 
-  app.post("/tokens/:id/claim-earnings", async (c) => {
+  api.post("/tokens/:id/claim-earnings", async (c) => {
     try {
       const t = tokens.get(c.req.param("id"));
       if (!t) return c.json({ error: "Token not found" }, 404);
@@ -480,7 +483,7 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Update tax ────────────────────────────────────────────────────────────
 
-  app.post("/tokens/:id/update-tax", async (c) => {
+  api.post("/tokens/:id/update-tax", async (c) => {
     try {
       const t = tokens.get(c.req.param("id"));
       if (!t) return c.json({ error: "Token not found" }, 404);
@@ -496,13 +499,13 @@ export function createApp(kv?: KVNamespace): Hono {
 
   // ── Trades / Portfolio / Wallet ───────────────────────────────────────────
 
-  app.get("/tokens/:id/trades", (c) => {
+  api.get("/tokens/:id/trades", (c) => {
     const t = tokens.get(c.req.param("id"));
     if (!t) return c.json({ error: "Token not found" }, 404);
     return c.json([...t.trades].reverse().slice(0, 100));
   });
 
-  app.get("/portfolio/:pubkey", (c) => {
+  api.get("/portfolio/:pubkey", (c) => {
     const pubkey = c.req.param("pubkey");
     const holdings = [];
     for (const t of tokens.values()) {
@@ -520,14 +523,17 @@ export function createApp(kv?: KVNamespace): Hono {
     return c.json(holdings);
   });
 
-  app.post("/wallet/generate", (c) => {
+  api.post("/wallet/generate", (c) => {
     const secret = randomBytes(32);
     return c.json({ secretHex: secret.toString("hex"), note: "Store safely — this is your wallet key on Rialo devnet." });
   });
 
   // ── AI agent routes (Fable 5) ─────────────────────────────────────────────
   const agentHono = makeAgentHono(tokens, kelvinToRlo);
-  app.route("/", agentHono);
+  api.route("/", agentHono);
+
+  // Mount all API routes under /api — matches what the browser fetches
+  app.route("/api", api);
 
   return app;
 }
