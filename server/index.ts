@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
 import path from "path";
 import { deserializeTokenState, deriveTokenStatePda } from "./rialo-server";
+import { makeAgentRouter } from "./routes/agent.js";
 
 const app = express();
 app.use(cors());
@@ -774,6 +775,9 @@ app.post("/wallet/generate", (_req, res) => {
   const secret = randomBytes(32);
   res.json({ secretHex: secret.toString("hex"), note: "Store safely — this is your wallet key on Rialo devnet." });
 });
+
+// ─── AI agent routes ──────────────────────────────────────────────────────────
+app.use(makeAgentRouter(tokens, kelvinToRlo));
 
 // SPA fallback — serve index.html for all non-API routes in production
 if (fs.existsSync(DIST)) {

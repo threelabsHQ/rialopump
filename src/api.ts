@@ -97,4 +97,35 @@ export const api = {
     }),
   portfolio: (pubkey: string) => req<PortfolioHolding[]>(`/portfolio/${pubkey}`),
   generateWallet: () => req<{ secretHex: string; note: string }>("/wallet/generate", { method: "POST" }),
+
+  // ── AI agent ──────────────────────────────────────────────────────────────
+  /** Start an async Fable-5-powered analysis. Returns a runId to poll. */
+  startAnalysis: (tokenId: string) =>
+    req<{ runId: string; status: string }>("/agent/analyze", {
+      method: "POST",
+      body: JSON.stringify({ tokenId }),
+    }),
+  /** Poll an in-progress or completed analysis run. */
+  pollAnalysis: (runId: string) =>
+    req<{
+      runId: string;
+      status: "running" | "done" | "failed";
+      result: AnalysisResult | null;
+      error: string | null;
+    }>(`/agent/analyze/${runId}`),
+  /** Instant heuristic analysis — no API key required. */
+  analyzeSync: (tokenId: string) =>
+    req<AnalysisResult>(`/agent/analyze-sync/${tokenId}`),
 };
+
+export interface AnalysisResult {
+  sentiment: "bullish" | "bearish" | "neutral";
+  sentimentScore: number;
+  graduationOdds: number;
+  summary: string;
+  signals: string[];
+  graduationEta: string;
+  riskLevel: "low" | "medium" | "high";
+  generatedAt: number;
+  source: "ai" | "heuristic";
+}

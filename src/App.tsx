@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { FrostProvider } from "@rialo/frost";
 import { frostConfig } from "./frost.config";
 import { useMultiWallet } from "./hooks/useMultiWallet";
+import { useChain } from "./hooks/useChain";
 import { WalletPanel } from "./components/WalletPanel";
 import { HomeView } from "./views/HomeView";
 import { TokenView } from "./views/TokenView";
@@ -10,44 +11,30 @@ import { PortfolioView } from "./views/PortfolioView";
 import type { View, WalletState } from "./types";
 import { Home, Rocket, Briefcase, Zap, Menu, X, ChevronUp, Sun, Moon } from "lucide-react";
 import { useTheme } from "./hooks/useTheme";
+import { useIsMobile } from "./hooks/useIsMobile";
 import { Toaster } from "sonner";
 
 const spectral = "linear-gradient(90deg, #5fbeff, #af8ff4, #f05c6b, #ffcd83, #7ef1b3)";
 
-function useIsMobile(): boolean {
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
-  useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  }, []);
-  return isMobile;
-}
-
 function ChainStatus() {
-  const [connected, setConnected] = useState<boolean | null>(null);
-  const [blockHeight, setBlockHeight] = useState<string | null>(null);
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const res = await fetch("/api/chain");
-        const data = (await res.json()) as { blockHeight: string };
-        setConnected(true);
-        setBlockHeight(parseInt(data.blockHeight).toLocaleString());
-      } catch { setConnected(false); }
-    };
-    void check();
-    const id = setInterval(() => { void check(); }, 15_000);
-    return () => clearInterval(id);
-  }, []);
+  const chain = useChain();
+  const dot = chain.connected === false
+    ? "var(--danger)"
+    : chain.connected
+    ? "var(--success)"
+    : "var(--subtle)";
+  const label = !chain.lastCheckedAt
+    ? "Connecting…"
+    : chain.connected
+    ? `Rialo Devnet · ${chain.blockHeight?.toLocaleString() ?? "…"}`
+    : "Disconnected";
   return (
     <div className="flex items-center gap-1.5">
-      <div className="w-2 h-2 rounded-full"
-        style={{ background: connected === null ? "var(--subtle)" : connected ? "var(--success)" : "var(--danger)" }} />
-      <span className="text-xs font-medium mono" style={{ color: "var(--muted)" }}>
-        {connected === null ? "Connecting…" : connected ? "Rialo Devnet" : "Disconnected"}
-        {blockHeight && ` · ${blockHeight}`}
-      </span>
+      <div className="w-2 h-2 rounded-full" style={{ background: dot }} />
+      <span className="text-xs font-medium mono" style={{ color: "var(--muted)" }}>{label}</span>
+      {chain.latencyMs !== null && chain.connected && (
+        <span className="text-[10px]" style={{ color: "var(--subtle)" }}>{chain.latencyMs}ms</span>
+      )}
     </div>
   );
 }

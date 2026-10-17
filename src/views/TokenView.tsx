@@ -9,6 +9,9 @@ import { CreatorPanel } from "../components/CreatorPanel";
 import { TokenAvatar } from "../components/ui/TokenAvatar";
 import { GlassCard } from "../components/ui/GlassCard";
 import { ProgressBar } from "../components/ui/ProgressBar";
+import { AIInsight } from "../components/AIInsight";
+import { LiveBadge } from "../components/LiveBadge";
+import { useOnchainToken } from "../hooks/useOnchainToken";
 import { shortenAddress, formatLargeNumber, timeAgo, fmtPumpPrice, fmtUsd } from "../utils/crypto";
 import { ArrowLeft, Copy, ExternalLink, Loader2, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +30,9 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState<string | null>(null);
 
+  // Live onchain state — separate polling so we always show chain-verified values
+  const { onchainState, syncing, lastSyncedAt } = useOnchainToken(tokenId);
+
   const load = useCallback(async () => {
     try {
       const [t, trs] = await Promise.all([api.token(tokenId), api.trades(tokenId)]);
@@ -43,6 +49,17 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
     return () => clearInterval(id);
   }, [load]);
 
+  // Merge live onchain values into the displayed token
+  const liveToken: Token | null = token && onchainState ? {
+    ...token,
+    tokenSupply: onchainState.tokensSold,
+    graduated: onchainState.graduated,
+    tokenTaxBps: onchainState.tokenTaxBps,
+    creatorEarnings: onchainState.creatorEarnings,
+    realRloRaised: onchainState.realRloRaised,
+    progressPct: Math.min(100, (onchainState.realRloRaised / (token.graduationTarget ?? 85)) * 100),
+  } : token;
+
   if (loading) return (
     <div className="flex items-center justify-center py-24 gap-3">
       <Loader2 size={22} className="animate-spin" style={{ color: "var(--accent)" }} />
@@ -57,6 +74,7 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
     </GlassCard>
   );
 
+  const displayToken = liveToken ?? token;
   const isCreator = wallet?.pubkey === token.creator;
 
   return (
@@ -73,22 +91,28 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
         </button>
 
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <TokenAvatar imageUrl={token.imageUrl} symbol={token.symbol} size={44} />
+          <TokenAvatar imageUrl={displayToken.imageUrl} symbol={displayToken.symbol} size={44} />
 
           <div className="flex-1 min-w-0">
             {/* Name + badges */}
             <div className="flex items-center gap-2 flex-wrap">
               <span className="display font-bold text-base leading-tight" style={{ color: "var(--ink)" }}>
-                {token.name}
+                {displayToken.name}
               </span>
               <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
                 style={{ background: "var(--surface-strong)", color: "var(--ink-2)" }}>
-                ${token.symbol}
+                ${displayToken.symbol}
               </span>
-              {token.graduated && (
+              {displayToken.graduated && (
                 <span className="px-2 py-0.5 rounded-full text-xs font-semibold"
                   style={{ background: "rgba(26,128,71,0.14)", color: "var(--success)" }}>
                   ✓ Graduated
+                </span>
+              )}
+              <LiveBadge syncing={syncing} />
+              {lastSyncedAt && (
+                <span className="text-[10px]" style={{ color: "var(--subtle)" }}>
+                  chain · {new Date(lastSyncedAt).toLocaleTimeString()}
                 </span>
               )}
             </div>
@@ -96,15 +120,15 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
             {/* Sub-line: price + meta */}
             <div className="flex items-center gap-3 mt-0.5 flex-wrap">
               <span className="mono text-sm font-bold" style={{ color: "var(--accent)" }}>
-                {fmtPumpPrice(token.currentPrice ?? 0, 4)} RLO
+                {fmtPumpPrice(displayToken.currentPrice ?? 0, 4)} RLO
               </span>
-              {(token.priceUsd ?? 0) > 0 && (
+              {(displayToken.priceUsd ?? 0) > 0 && (
                 <span className="text-xs" style={{ color: "var(--muted)" }}>
-                  {fmtUsd(token.priceUsd ?? 0, 8)}
+                  {fmtUsd(displayToken.priceUsd ?? 0, 8)}
                 </span>
               )}
               <span className="text-xs" style={{ color: "var(--muted)" }}>
-                by {shortenAddress(token.creator, 5)} · {timeAgo(token.createdAt)}
+                by {shortenAddress(displayToken.creator, 5)} · {timeAgo(displayToken.createdAt)}
               </span>
             </div>
           </div>
@@ -114,22 +138,24 @@ export function TokenView({ tokenId, wallet, signTx, onBack, isMobile }: TokenVi
       {/* ── Body ── */}
       {isMobile ? (
         <div className="space-y-4">
-          <BondingChart token={token} trades={trades} />
-          <TradePanel token={token} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
-          {isCreator && <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />}
-          <TokenInfo token={token} />
+          <BondingChart token={displayToken} trades={trades} />
+          <TradePanel token={displayToken} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
+          {isCreator && <CreatorPanel token={displayToken} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />}
+          <AIInsight tokenId={tokenId} />
+          <TokenInfo token={displayToken} />
           <TradesTable trades={trades} />
         </div>
       ) : (
         <div className="grid grid-cols-[1fr_360px] gap-4 items-start">
           <div className="space-y-4">
-            <BondingChart token={token} trades={trades} />
-            <TokenInfo token={token} />
+            <BondingChart token={displayToken} trades={trades} />
+            <TokenInfo token={displayToken} />
             <TradesTable trades={trades} />
           </div>
           <div className="space-y-3">
-            <TradePanel token={token} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
-            {isCreator && <CreatorPanel token={token} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />}
+            <TradePanel token={displayToken} wallet={wallet} signTx={signTx} onTrade={() => { void load(); }} />
+            {isCreator && <CreatorPanel token={displayToken} wallet={wallet} signTx={signTx} onRefresh={() => { void load(); }} />}
+            <AIInsight tokenId={tokenId} />
           </div>
         </div>
       )}

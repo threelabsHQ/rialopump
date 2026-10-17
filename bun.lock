@@ -25,6 +25,7 @@
         "framer-motion": "^11.15.0",
         "lucide-react": "^0.468.0",
         "multer": "^2.4.0",
+        "oh-my-fable": "^0.4.5",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
         "sonner": "^1.7.1",
@@ -1416,6 +1417,8 @@
     "object.assign": ["object.assign@4.1.7", "", { "dependencies": { "call-bind": "^1.0.8", "call-bound": "^1.0.3", "define-properties": "^1.2.1", "es-object-atoms": "^1.0.0", "has-symbols": "^1.1.0", "object-keys": "^1.1.1" } }, "sha512-nK28WOo+QIjBkDduTINE4JkF/UJJKyf2EJxvJKfblDpyg0Q+pkOHNTL0Qwy6NP6FhE/EnzV73BxxqcJaXY9anw=="],
 
     "ofetch": ["ofetch@1.5.1", "", { "dependencies": { "destr": "^2.0.5", "node-fetch-native": "^1.6.7", "ufo": "^1.6.1" } }, "sha512-2W4oUZlVaqAPAil6FUg/difl6YhqhUR7x2eZY4bQCko22UXg3hptq9KLQdqFClV+Wu85UX7hNtdGTngi/1BxcA=="],
+
+    "oh-my-fable": ["oh-my-fable@0.4.5", "", { "bin": { "omf": "dist/cli.js", "oh-my-fable": "dist/cli.js" } }, "sha512-gvClE+b/xxrQTlSEkxTRLGQSEiGo43E2fQG/XWXhmuNf433VR/3mVnP6kj8WInP+1AjDGbwjm2IAxIP3UGjxFQ=="],
 
     "on-exit-leak-free": ["on-exit-leak-free@2.1.2", "", {}, "sha512-0eJJY6hXLGf1udHwfNftBqH+g73EU4B504nZeKpz1sYRKafAghwxEJunB2O7rDZkL4PGfsMVnTXZ2EjibbqcsA=="],
 
